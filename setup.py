@@ -23,7 +23,7 @@ requires = [
     # minimal requirements listing
     "cmlibs.maths >= 0.3",
     "cmlibs.utils >= 0.10",
-    "cmlibs.zinc >= 4.0"
+    "cmlibs.zinc >= 4"
 ]
 readme.extend(['', 'License', '=======', '', '::', ''])
 source_license = readfile("LICENSE")

@@ -2,7 +2,8 @@ import math
 import os
 import unittest
 from cmlibs.utils.zinc.field import createFieldMeshIntegral
-from cmlibs.utils.zinc.finiteelement import evaluate_field_nodeset_mean, find_node_with_name
+from cmlibs.utils.zinc.finiteelement import evaluate_field_nodeset_mean, find_node_with_name, evaluate_field_nodeset_range
+from cmlibs.zinc.context import Context
 from cmlibs.zinc.field import Field
 from cmlibs.zinc.node import Node, Nodeset
 from cmlibs.zinc.result import RESULT_OK
@@ -764,6 +765,24 @@ class FitCubeToSphereTestCase(unittest.TestCase):
                 self.assertAlmostEqual(expectedLocation[1][0], xi[0], delta=TOL)
                 self.assertAlmostEqual(expectedLocation[1][1], xi[1], delta=TOL)
                 self.assertAlmostEqual(expectedLocation[1][2], xi[2], delta=TOL)
+
+    def test_nodeset_max_and_min(self):
+        zinc_model_file = os.path.join(here, "resources", "two_element_cube.exf")
+
+        context = Context("max_min")
+        logger = context.getLogger()
+        region = context.getDefaultRegion()
+        region.readFile(zinc_model_file)
+
+        fm = region.getFieldmodule()
+
+        nodes = fm.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_NODES)
+        coordinates = fm.findFieldByName("coordinates")
+        self.assertEqual(0, logger.getNumberOfMessages())
+        min_range, max_range = evaluate_field_nodeset_range(coordinates, nodes)
+        self.assertEqual(0, logger.getNumberOfMessages())
+        self.assertIsNotNone(min_range)
+        self.assertIsNotNone(max_range)
 
 
 if __name__ == "__main__":
