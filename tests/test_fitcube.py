@@ -429,6 +429,10 @@ class FitCubeToSphereTestCase(unittest.TestCase):
         s2 = fitter.encodeSettingsJSON()
         self.assertEqual(s, s2)
 
+        min_jac_el, min_jac_value = fitter.getLowestElementJacobian()
+        self.assertEqual(1, min_jac_el)
+        self.assertAlmostEqual(0.1869875394, min_jac_value)
+
     def test_fitRegularDataGroupWeight(self):
         """
         Test fitting with variable data group weights and sliding factors.
@@ -518,6 +522,10 @@ class FitCubeToSphereTestCase(unittest.TestCase):
         self.assertAlmostEqual(surfaceArea, 3.187490694645035, delta=1.0E-4)
         self.assertAlmostEqual(volume, 0.5072619397447008, delta=1.0E-4)
 
+        min_jac_el, min_jac_value = fitter.getLowestElementJacobian()
+        self.assertEqual(1, min_jac_el)
+        self.assertAlmostEqual(1.0, min_jac_value)
+
     def test_groupSettings(self):
         """
         Test per-group settings, and inheritance from previous 
@@ -572,19 +580,23 @@ class FitCubeToSphereTestCase(unittest.TestCase):
                 activeNodeset, fitter.getFieldmodule().findFieldByName(groupName)))
 
         groupErrors = {
-            "bottom": (0.47716552515635985, 0.5001722675609085),
-            "sides": (0.3721661947669986, 0.5000286856904854),
-            "top": (0.5699148581001906, 0.6755409758922845),
-            "marker": (0.9354143466934853, 1.224744871391589)
+            "bottom": (0.47716552515635985, 0.5001722675609085, math.inf),
+            "sides": (0.3721661947669986, 0.5000286856904854, math.inf),
+            "top": (0.5699148581001906, 0.6755409758922845, math.inf),
+            "marker": (0.9354143466934853, 1.224744871391589, math.inf)
         }
         for groupName, errors in groupErrors.items():
             rms_error, max_error = fitter.getDataRMSAndMaximumProjectionErrorForGroup(groupName)
             self.assertAlmostEqual(rms_error, errors[0], 5)
             self.assertAlmostEqual(max_error, errors[1], 5)
+            jac_det_el, jac_det_value = fitter.getLowestElementJacobianForGroup(groupName)
+            self.assertAlmostEqual(jac_det_value, errors[2], 5)
 
         rms_error, max_error = fitter.getDataRMSAndMaximumProjectionErrorForGroup('left')
         self.assertEqual(None, rms_error)
         self.assertEqual(None, max_error)
+        jac_det_el, jac_det_value = fitter.getLowestElementJacobianForGroup('left')
+        self.assertIsNone(jac_det_value)
 
         # test override and inherit
         config2 = FitterStepConfig()

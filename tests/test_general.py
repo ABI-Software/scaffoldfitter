@@ -75,6 +75,9 @@ class GeneralTestCase(unittest.TestCase):
             rmsError, maxError = fitter.getDataRMSAndMaximumProjectionError()
             self.assertAlmostEqual(rmsError, expectedRmsError, delta=TOL)  # sqrt(0.12)
             self.assertAlmostEqual(maxError, expectedMaxError, delta=TOL)
+            min_jac_el, min_jac_value = fitter.getLowestElementJacobian()
+            self.assertEqual(1, min_jac_el)
+            self.assertAlmostEqual(0.0, min_jac_value, delta=TOL)
 
     def test_setting_group_outlier_length(self):
         zinc_model_file = os.path.join(here, "resources", "nerve_trunk_model.exf")
