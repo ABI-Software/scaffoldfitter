@@ -9,6 +9,7 @@ class FitterStep:
     Base class for fitter steps.
     """
     _defaultGroupName = "<default>"
+    _notSetValue = "<not set>"
 
     def __init__(self):
         """
@@ -89,7 +90,8 @@ class FitterStep:
         """
         :param groupName:  Exact model group name, or None for default group.
         :param settingName: Exact setting name.
-        :return: Inherited value or None if none.
+        :return: Inherited value or None if none, isSet.
+        Value isSet is True if a value has been set for any ancestor.
         """
         if groupName is None:
             groupName = self._defaultGroupName
@@ -97,12 +99,12 @@ class FitterStep:
         while True:
             inheritStep = self.getFitter().getInheritFitterStep(inheritStep)
             if not inheritStep:
-                return None
+                return None, False
             groupSettings = inheritStep._groupSettings.get(groupName)
             if groupSettings:
                 inheritedValue = groupSettings.get(settingName, "<not set>")
                 if inheritedValue != "<not set>":
-                    return inheritedValue
+                    return inheritedValue, True
 
     def getGroupSetting(self, groupName: str, settingName: str, defaultValue):
         """
@@ -112,28 +114,32 @@ class FitterStep:
         :param defaultValue: Value to use if setting not found for group.
         Value falls back to value for default group if not set or inherited,
         or defaultValue if not set in default group.
-        The second return value is True if the value is set locally to a value
-        or None if reset locally.
+        The second return value is True if the value is set locally to a value,
+        None if reset locally, False if not set locally.
         The third return value is True if a previous config has set the value.
         """
         if groupName is None:
             groupName = self._defaultGroupName
-        value = None
+        value = self._notSetValue  # never returned
         setLocally = False
         groupSettings = self._groupSettings.get(groupName)
         if groupSettings:
             if settingName in groupSettings:
                 value = groupSettings[settingName]
                 setLocally = None if (value is None) else True
-        inheritedValue = self._getInheritedGroupSetting(groupName, settingName)
-        inheritable = inheritedValue is not None
-        if inheritable and not (setLocally or (setLocally is None)):
+        # check if inheritable first from earlier steps under group name
+        inheritedValue, inheritable = self._getInheritedGroupSetting(groupName, settingName)
+        if inheritable and (value == self._notSetValue):
             value = inheritedValue
-        if value is None:
-            if groupName != self._defaultGroupName:
-                value = self.getGroupSetting(self._defaultGroupName, settingName, defaultValue)[0]
-            else:
-                value = defaultValue
+        if (not inheritable) and (groupName != self._defaultGroupName):
+            # check if inheritable from default group
+            defaultGroupValue, defaultGroupSetLocally, defaultGroupInheritable = self.getGroupSetting(
+                self._defaultGroupName, settingName, defaultValue)
+            inheritable = defaultGroupSetLocally or defaultGroupInheritable
+            if inheritable and (value == self._notSetValue):
+                value = defaultGroupValue
+        if (value == None) or (value == self._notSetValue):
+            value = defaultValue
         return value, setLocally, inheritable
 
     def setGroupSetting(self, groupName: str, settingName: str, value):
@@ -147,9 +153,15 @@ class FitterStep:
         if groupName is None:
             groupName = self._defaultGroupName
         if value is None:
-            if self._getInheritedGroupSetting(groupName, settingName) is None:
-                self.clearGroupSetting(groupName, settingName)
-                return
+            if not self._getInheritedGroupSetting(groupName, settingName)[1]:
+                clear = (groupName == self._defaultGroupName)
+                if not clear:
+                    defaultGroupValue, defaultGroupSetLocally, defaultGroupInheritable = self.getGroupSetting(
+                        self._defaultGroupName, settingName, self._notSetValue)
+                    clear = not (defaultGroupSetLocally or defaultGroupInheritable)
+                if clear:
+                    self.clearGroupSetting(groupName, settingName)
+                    return
         groupSettings = self._groupSettings.get(groupName)
         if not groupSettings:
             groupSettings = self._groupSettings[groupName] = {}

@@ -99,6 +99,7 @@ class Fitter:
         self._dataCentre = [0.0, 0.0, 0.0]
         self._dataScale = 1.0
         self._diagnosticLevel = 0
+        self._groupProjectionData = {}  # map(group name) to (subgroup, projectionMeshGroup, findHighestDimension)
         # must always have an initial FitterStepConfig - which can never be removed
         self._fitterSteps = []
         fitterStep = FitterStepConfig()
@@ -276,6 +277,7 @@ class Fitter:
         self._curvatureActiveMeshGroup = None
         self._strainPenaltyField = None
         self._curvaturePenaltyField = None
+        self._groupProjectionData = {}
 
     def load(self):
         """
@@ -642,8 +644,8 @@ class Fitter:
                 dataGroup = self.getGroupDataProjectionNodesetGroup(group)
                 if not dataGroup:
                     continue
-                meshGroup = self.getGroupDataProjectionMeshGroup(group)
-                meshDimension = meshGroup.getDimension()
+                meshGroup = self.getGroupDataProjectionMeshGroup(group, fitterStepFit)[0]
+                meshDimension = meshGroup.getDimension() if meshGroup else 0
                 if (meshDimension < 1) or (meshDimension > 2):
                     continue
                 dataWeight = fitterStepFit.getGroupDataWeight(groupName)[0]
@@ -1113,6 +1115,7 @@ class Fitter:
         """
         if (self._modelFitGroup is not None) and (modelFitGroup == self._modelFitGroup):
             return
+        self._groupProjectionData = {}  # as this affects intersection groups
         fieldGroup = modelFitGroup.castGroup() if modelFitGroup else None
         assert (fieldGroup is None) or fieldGroup.isValid()
         if fieldGroup:
@@ -1221,7 +1224,7 @@ class Fitter:
                 self._dataProjectionNodesetGroups.append(group.createNodesetGroup(datapoints))
             self._defineDataProjectionOrientationField()
 
-    def calculateGroupDataProjections(self, fieldcache, group, dataGroup, meshGroup, meshLocation,
+    def calculateGroupDataProjections(self, fieldcache, group, dataGroup, meshGroup, findHighestDimension, meshLocation,
                                       activeFitterStepConfig: FitterStepConfig):
         """
         Project data points for group. Assumes called while ChangeManager is active for fieldmodule.
@@ -1229,6 +1232,8 @@ class Fitter:
         :param group: The FieldGroup being fitted (parent of dataGroup, meshGroup).
         :param dataGroup: Nodeset group containing data points to project.
         :param meshGroup: MeshGroup containing surfaces/lines to project onto.
+        :param findHighestDimension: Set to True if mesh group does not have a parent/ancestor map to highest dimension
+        model fit mesh, requiring an EXACT re-projection of the coordinates at the NEAREST location on meshGroup.
         :param meshLocation: FieldStoredMeshLocation to store found location in on highest dimension mesh.
         :param activeFitterStepConfig: Where to get current projection modes from.
         """
@@ -1274,10 +1279,21 @@ class Fitter:
         if self._modelFitGroup:
             storeMesh = self._modelFitGroup.getMeshGroup(storeMesh)
             assert storeMesh.isValid(), "Model fit group is wrong dimension"
-        findLocation = self._fieldmodule.createFieldFindMeshLocation(
-            dataCoordinates, self._modelCoordinatesField, storeMesh)
-        assert RESULT_OK == findLocation.setSearchMesh(meshGroup)
-        findLocation.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
+        if findHighestDimension:
+            # find nearest on search mesh, then find exact on store mesh from projected coordinates
+            findLocation1 = self._fieldmodule.createFieldFindMeshLocation(
+                dataCoordinates, self._modelCoordinatesField, meshGroup)
+            findLocation1.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
+            projectedCoordinates = self._fieldmodule.createFieldEmbedded(self._modelCoordinatesField, findLocation1)
+            findLocation = self._fieldmodule.createFieldFindMeshLocation(
+                projectedCoordinates, self._modelCoordinatesField, storeMesh)
+            findLocation.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_EXACT)
+        else:
+            # automatic map from search mesh to store mesh
+            findLocation = self._fieldmodule.createFieldFindMeshLocation(
+                dataCoordinates, self._modelCoordinatesField, storeMesh)
+            assert RESULT_OK == findLocation.setSearchMesh(meshGroup)
+            findLocation.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
         nodeIter = dataGroup.createNodeiterator()
         node = nodeIter.next()
         dataProportionCounter = 0.5
@@ -1325,17 +1341,69 @@ class Fitter:
             return dataNodesetGroup
         return None
 
-    def getGroupDataProjectionMeshGroup(self, group: FieldGroup):
+    def getGroupDataProjectionMeshGroup(self, group: FieldGroup, fitterStep: FitterStep):
         """
-        Get mesh group for 2D if not 1D mesh containing elements
-        for projecting data in group, if any.
-        :return: MeshGroup or None if none or empty
+        Get mesh group for 2D if not 1D mesh containing elements for projecting data in group, if any.
+        If there is a subgroup set or inherited by the group, finds or builds on demand an equal or lower
+        dimensional intersection mesh group.
+        :group: Zinc annotation group for which to get projection mesh group.
+        :fitterStep: FitterStep to get config for, with optional subgroup to intersect with.
+        :return: MeshGroup or None if none or empty, findHighestDimension.
+        The second argument is True if any of the mesh group doesn't have a child-parent[-grandparent]
+        map to highest dimension elements in the model or model fit group, and hence projections must be
+        re-found on the top-level mesh group.
         """
-        for meshDimension in range(2, 0, -1):
-            meshGroup = group.getMeshGroup(self._mesh[meshDimension - 1])
-            if meshGroup.isValid() and (meshGroup.getSize() > 0):
-                return meshGroup
-        return None
+        groupName = group.getName()
+        activeFitterStepConfig = self.getActiveFitterStepConfig(fitterStep)
+        subgroup = activeFitterStepConfig.getGroupProjectionSubgroup(groupName)[0]
+        groupProjectionData = self._groupProjectionData.get(groupName)
+        if groupProjectionData:
+            if (groupProjectionData[0] == subgroup):
+                return groupProjectionData[1], groupProjectionData[2]
+        returnMeshGroup = None
+        findHighestDimension = False
+        with ChangeManager(self._fieldmodule):
+            if groupProjectionData:
+                del self._groupProjectionData[groupName]  # cleans up field references if subgroup changed
+            highestDimensionMesh = self.getHighestDimensionMesh()
+            highestDimension = highestDimensionMesh.getDimension()
+
+            for meshDimension in range(2, 0, -1):
+                if meshDimension > highestDimension:
+                    continue
+                mesh = self._mesh[meshDimension - 1]
+                meshGroup = group.getMeshGroup(mesh)
+                if meshGroup.isValid() and (meshGroup.getSize() > 0):
+                    if subgroup:
+                        subgroupMeshGroup = subgroup.getMeshGroup(mesh)
+                        if subgroupMeshGroup.isValid() and (subgroupMeshGroup.getSize() > 0):
+                            intersectionGroup = self._fieldmodule.createFieldGroup()
+                            intersectionGroup.setName(groupName + " " + subgroup.getName())  # for debugging
+                            returnMeshGroup = intersectionGroup.createMeshGroup(mesh)
+                            returnMeshGroup.addElementsConditional(self._fieldmodule.createFieldAnd(group, subgroup))
+                            if returnMeshGroup.getSize() > 0:
+                                break
+                            del intersectionGroup
+                            returnMeshGroup = None
+                    else:
+                        returnMeshGroup = meshGroup
+                        break
+        if returnMeshGroup:
+            # do any elements in returnMeshGroup NOT have self or an ancestor in modelFitMesh?
+            # If so, need to find highest dimension mesh location by a second FindMeshLocation field when projecting
+            modelFitMesh = highestDimensionMesh
+            if self._modelFitGroup:
+                modelFitMesh = self._modelFitGroup.getMeshGroup(highestDimensionMesh)
+            elementiterator = returnMeshGroup.createElementiterator()
+            element = elementiterator.next()
+            while element.isValid():
+                if not element_or_ancestor_is_in_mesh(element, modelFitMesh):
+                    findHighestDimension = True
+                    break
+                element = elementiterator.next()
+        self._groupProjectionData[groupName] = (subgroup, returnMeshGroup, findHighestDimension)
+
+        return returnMeshGroup, findHighestDimension
 
     def calculateDataProjections(self, fitterStep: FitterStep):
         """
@@ -1365,7 +1433,7 @@ class Fitter:
                 dataGroup = self.getGroupDataProjectionNodesetGroup(group)
                 if not dataGroup:
                     continue
-                meshGroup = self.getGroupDataProjectionMeshGroup(group)
+                meshGroup, findHighestDimension = self.getGroupDataProjectionMeshGroup(group, fitterStep)
                 if not meshGroup:
                     if self.getDiagnosticLevel() > 0:
                         if group != self._markerGroup:
@@ -1391,8 +1459,8 @@ class Fitter:
                         node.merge(nodetemplate)
                         node = nodeIter.next()
                     del nodetemplate
-                self.calculateGroupDataProjections(fieldcache, group, dataGroup, meshGroup, self._dataHostLocationField,
-                                                   activeFitterStepConfig)
+                self.calculateGroupDataProjections(fieldcache, group, dataGroup, meshGroup, findHighestDimension,
+                                                   self._dataHostLocationField, activeFitterStepConfig)
                 # add elements being projected onto to active group for mesh dimension
                 self._activeDataProjectionMeshGroups[meshGroup.getDimension() - 1].addElementsConditional(group)
 
@@ -1636,3 +1704,18 @@ class Fitter:
         sr = sir.createStreamresourceFile(fileName)
         sir.setResourceDomainTypes(sr, Field.DOMAIN_TYPE_DATAPOINTS)
         self._region.write(sir)
+
+
+def element_or_ancestor_is_in_mesh(element, mesh):
+    """
+    Query whether element has a face mapping from any element in mesh.
+    :param element: Element to query.
+    :param mesh: Equal or higher dimension ancestor mesh or mesh group to check.
+    :return: True if element or any parent/ancestor is in modelFitMesh.
+    """
+    if mesh.containsElement(element):
+        return True
+    for p in range(1, element.getNumberOfParents() + 1):
+        if element_or_ancestor_is_in_mesh(element.getParentElement(p), mesh):
+            return True
+    return False
