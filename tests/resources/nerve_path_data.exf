@@ -231,6 +231,11 @@ Node: 44
  -5.812609121151026e-01
   5.944007913479817e-01
   1.000000000000000e-01
+Node: 45
+  3.000000000000000e-01
+ -1.000000000000000e-01
+  1.000000000000000e-01
+  1.000000000000000e-01
 !#nodeset datapoints
 Define node template: node2
 Shape. Dimension=0
@@ -428,6 +433,10 @@ Node group:
 !#mesh mesh1d, dimension=1, nodeset=nodes
 Element group:
 36..43
+Group name: edge
+!#nodeset nodes
+Node group:
+45
 Group name: marker
 !#nodeset datapoints
 Node group:

@@ -160,7 +160,7 @@ class FitterStepAlign(FitterStep):
                 dataGroup = self._fitter.getGroupDataProjectionNodesetGroup(group)
                 if not dataGroup:
                     continue
-                meshGroup = self._fitter.getGroupDataProjectionMeshGroup(group)
+                meshGroup = self._fitter.getGroupDataProjectionMeshGroup(group, self)[0]
                 if not meshGroup:
                     continue
                 count += 1
@@ -342,7 +342,7 @@ class FitterStepAlign(FitterStep):
                     dataGroup = self._fitter.getGroupDataProjectionNodesetGroup(group)
                     if not dataGroup:
                         continue
-                    meshGroup = self._fitter.getGroupDataProjectionMeshGroup(group)
+                    meshGroup = self._fitter.getGroupDataProjectionMeshGroup(group, self)[0]
                     if not meshGroup:
                         continue
                     groupName = f"{group.getName()}_group"
