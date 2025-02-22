@@ -14,6 +14,7 @@ from cmlibs.utils.zinc.region import write_to_buffer, read_from_buffer
 from cmlibs.zinc.context import Context
 from cmlibs.zinc.element import Elementbasis, Elementfieldtemplate
 from cmlibs.zinc.field import Field, FieldFindMeshLocation, FieldGroup
+from cmlibs.zinc.region import Region
 from cmlibs.zinc.result import RESULT_OK, RESULT_WARNING_PART_DONE
 
 from scaffoldfitter.fitterexceptions import FitterModelCoordinateField
@@ -32,19 +33,28 @@ def _next_available_identifier(node_set, candidate):
 
 class Fitter:
 
-    def __init__(self, zincModelFileName: str, zincDataFileName: str):
+    def __init__(self, zincModelFileName: str=None, zincDataFileName: str=None, region: Region=None):
         """
-        :param zincModelFileName: Name of zinc file supplying model to fit.
-        :param zincDataFileName: Name of zinc filed supplying data to fit to.
+        Create instance of Fitter either from model and data file names, or the model/fit region.
+        :param zincModelFileName: Name of zinc file supplying model to fit, or None if supplying region.
+        :param zincDataFileName: Name of zinc filed supplying data to fit to, or None if supplying region.
+        :param region: Region in which to build model and perform fitting, or None if supplying file names.
         """
         self._zincModelFileName = zincModelFileName
         self._zincDataFileName = zincDataFileName
-        self._context = Context("Scaffoldfitter")
+        if region:
+            assert (zincModelFileName is None) and (zincDataFileName is None)
+            self._context = region.getContext()
+            self._region = region
+            self._fieldmodule = region.getFieldmodule()
+        else:
+            assert region is None
+            self._context = Context("Scaffoldfitter")
+            self._region = None  # created by call to load()
+            self._fieldmodule = None
         self._zincVersion = self._context.getVersion()[1]
         self._logger = self._context.getLogger()
-        self._region = None
         self._rawDataRegion = None
-        self._fieldmodule = None
         self._modelCoordinatesField = None
         self._modelCoordinatesFieldName = None
         self._modelReferenceCoordinatesField = None
@@ -57,7 +67,6 @@ class Fitter:
         self._flattenGroupName = None
         self._dataCoordinatesField = None
         self._dataCoordinatesFieldName = None
-        self._mesh = []  # [dimension - 1]
         self._dataHostLocationField = None  # stored mesh location field in highest dimension mesh for all data, markers
         self._dataHostCoordinatesField = None  # embedded field giving host coordinates at data location
         self._dataDeltaField = None  # self._dataHostCoordinatesField - self._markerDataCoordinatesField
@@ -245,7 +254,6 @@ class Fitter:
         self._fibreField = None
         self._flattenGroup = None
         self._dataCoordinatesField = None
-        self._mesh = []
         self._dataHostLocationField = None
         self._dataHostCoordinatesField = None
         self._dataDeltaField = None
@@ -283,7 +291,9 @@ class Fitter:
         """
         Read model and data and define fit fields and data.
         Can call again to reset fit, after parameters have changed.
+        Must not call this function if model and data files not supplied to constructor!
         """
+        assert self._zincModelFileName and self._zincDataFileName
         self._clearFields()
         self._region = self._context.createRegion()
         self._region.setName("model_region")
@@ -291,7 +301,14 @@ class Fitter:
         self._rawDataRegion = self._region.createChild("raw_data")
         self._loadModel()
         self._loadData()
-        self._defineDataProjectionFields()
+        self.defineDataProjectionFields()
+        self.initializeFit()
+
+    def initializeFit(self):
+        """
+        Call after model and data are in memory, to calculate data range, mark any existing
+        fitter steps as not run, and run the initial config step to calculate initial data projections.
+        """
         # Get centre and scale of data coordinates to manage fitting tolerances and steps.
         datapoints = self._fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
         minimums, maximums = evaluate_field_nodeset_range(self._dataCoordinatesField, datapoints)
@@ -316,7 +333,7 @@ class Fitter:
         """
         return self._dataScale
 
-    def _defineCommonMeshFields(self):
+    def defineCommonMeshFields(self):
         """
         Defines fields for storing per-element strain and curvature penalties
         plus active mesh groups for each.
@@ -371,12 +388,11 @@ class Fitter:
     def _loadModel(self):
         result = self._region.readFile(self._zincModelFileName)
         assert result == RESULT_OK, "Failed to load model file" + str(self._zincModelFileName)
-        self._mesh = [self._fieldmodule.findMeshByDimension(d + 1) for d in range(3)]
         self._discoverModelCoordinatesField()
         self._discoverModelFitGroup()
         self._discoverFibreField()
         self._discoverFlattenGroup()
-        self._defineCommonMeshFields()
+        self.defineCommonMeshFields()
 
     def _defineCommonDataFields(self):
         """
@@ -413,7 +429,7 @@ class Fitter:
             self._activeDataProjectionGroupFields = []
             self._activeDataProjectionMeshGroups = []
             for d in range(2):
-                mesh = self._mesh[d]
+                mesh = self.getMesh(d + 1)
                 activeDataProjectionGroupName = "active_data." + mesh.getName()
                 activeDataProjectionGroupField = \
                     self._fieldmodule.findFieldByName(activeDataProjectionGroupName).castGroup()
@@ -423,9 +439,51 @@ class Fitter:
                 self._activeDataProjectionGroupFields.append(activeDataProjectionGroupField)
                 self._activeDataProjectionMeshGroups.append(activeDataProjectionGroupField.getOrCreateMeshGroup(mesh))
 
+    def transferData(self, dataRegion):
+        """
+        Transfer data from dataRegion to fit region, converting nodes to data points.
+        :param dataRegion: Zinc Region containing data; contour points are nodes, marker points are datapoints.
+        """
+        fieldmodule = dataRegion.getFieldmodule()
+        with ChangeManager(fieldmodule):
+            # if there are both nodes and datapoints, offset datapoint identifiers to ensure different
+            nodes = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_NODES)
+            if nodes.getSize() > 0:
+                datapoints = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
+                if datapoints.getSize() > 0:
+                    datapoint_iterator = datapoints.createNodeiterator()
+                    datapoint = datapoint_iterator.next()
+                    latest = 1
+                    datapoint_new_identifier_map = {}
+                    while datapoint.isValid():
+                        identifier = _next_available_identifier(nodes, latest)
+                        datapoint_new_identifier_map[identifier] = datapoint
+                        latest = identifier + 1
+                        datapoint = datapoint_iterator.next()
+
+                    for new_identifier, datapoint in datapoint_new_identifier_map.items():
+                        datapoint.setIdentifier(new_identifier)
+
+                # transfer nodes as datapoints to self._region
+                buffer = write_to_buffer(dataRegion, resource_domain_type=Field.DOMAIN_TYPE_NODES)
+                assert buffer is not None, "Failed to write nodes"
+                buffer = buffer.replace(bytes("!#nodeset nodes", "utf-8"), bytes("!#nodeset datapoints", "utf-8"))
+                result = read_from_buffer(self._region, buffer)
+                if result != RESULT_OK:
+                    print("Node to datapoints log:")
+                    self.print_log()
+                    raise AssertionError("Failed to load nodes as datapoints")
+            # transfer datapoints to self._region
+            buffer = write_to_buffer(dataRegion, resource_domain_type=Field.DOMAIN_TYPE_DATAPOINTS)
+            assert buffer is not None, "Failed to write datapoints"
+            result = read_from_buffer(self._region, buffer)
+            if result != RESULT_OK:
+                self.print_log()
+                raise AssertionError("Failed to load datapoints, result " + str(result))
+
     def _loadData(self):
         """
-        Load zinc data file into self._rawDataRegion.
+        Load zinc data file into self._rawDataRegion & transfer as data points to fit region.
         Rename data groups to exactly match model groups where they differ by case and whitespace only.
         Transfer data points (and converted nodes) into self._region.
         """
@@ -460,46 +518,15 @@ class Fitter:
                 else:
                     if writeDiagnostics:
                         print("Load data: Data group '" + dataGroupName + "' not found in model")
-            # if there are both nodes and datapoints, offset datapoint identifiers to ensure different
-            nodes = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_NODES)
-            if nodes.getSize() > 0:
-                datapoints = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
-                if datapoints.getSize() > 0:
-                    datapoint_iterator = datapoints.createNodeiterator()
-                    datapoint = datapoint_iterator.next()
-                    latest = 1
-                    datapoint_new_identifier_map = {}
-                    while datapoint.isValid():
-                        identifier = _next_available_identifier(nodes, latest)
-                        datapoint_new_identifier_map[identifier] = datapoint
-                        latest = identifier + 1
-                        datapoint = datapoint_iterator.next()
-
-                    for new_identifier, datapoint in datapoint_new_identifier_map.items():
-                        datapoint.setIdentifier(new_identifier)
-
-                # transfer nodes as datapoints to self._region
-                buffer = write_to_buffer(self._rawDataRegion, resource_domain_type=Field.DOMAIN_TYPE_NODES)
-                assert buffer is not None, "Failed to write nodes"
-                buffer = buffer.replace(bytes("!#nodeset nodes", "utf-8"), bytes("!#nodeset datapoints", "utf-8"))
-                result = read_from_buffer(self._region, buffer)
-                if result != RESULT_OK:
-                    print("Node to datapoints log:")
-                    self.print_log()
-                    raise AssertionError("Failed to load nodes as datapoints")
-        # transfer datapoints to self._region
-        buffer = write_to_buffer(self._rawDataRegion, resource_domain_type=Field.DOMAIN_TYPE_DATAPOINTS)
-        assert buffer is not None, "Failed to write datapoints"
-        result = read_from_buffer(self._region, buffer)
-        if result != RESULT_OK:
-            self.print_log()
-            raise AssertionError("Failed to load datapoints, result " + str(result))
+            self.transferData(self._rawDataRegion)
         self._discoverDataCoordinatesField()
         self._discoverMarkerGroup()
 
     def run(self, endStep=None, modelFileNameStem=None, reorder=False):
         """
         Run either all remaining fitter steps or up to specified end step.
+        Only call this to run to a previous step if Fitter is working with model and data files;
+        see __init__().
         :param endStep: Last fitter step to run, or None to run all.
         :param modelFileNameStem: File name stem for writing intermediate model files.
         :param reorder: Reload if reordering.
@@ -1210,14 +1237,14 @@ class Fitter:
             self._fieldmodule, "data_projection_orientation",
             components_count=coordinatesCount*coordinatesCount)
 
-    def _defineDataProjectionFields(self):
+    def defineDataProjectionFields(self):
         self._dataProjectionGroupNames = []
         self._dataProjectionNodeGroupFields = []
         self._dataProjectionNodesetGroups = []
         with ChangeManager(self._fieldmodule):
             datapoints = self._fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
             for d in range(2):
-                mesh = self._mesh[d]  # mesh1d, mesh2d
+                mesh = self.getMesh(d + 1)  # mesh1d, mesh2d
                 group = self._fieldmodule.createFieldGroup()
                 group.setName(getUniqueFieldName(self._fieldmodule, "data_projection_group_" + mesh.getName()))
                 self._dataProjectionNodeGroupFields.append(group)
@@ -1371,7 +1398,7 @@ class Fitter:
             for meshDimension in range(2, 0, -1):
                 if meshDimension > highestDimension:
                     continue
-                mesh = self._mesh[meshDimension - 1]
+                mesh = self.getMesh(meshDimension)
                 meshGroup = group.getMeshGroup(mesh)
                 if meshGroup.isValid() and (meshGroup.getSize() > 0):
                     if subgroup:
@@ -1626,15 +1653,18 @@ class Fitter:
         return self._fitterSteps
 
     def getMesh(self, dimension):
-        assert 1 <= dimension <= 3
-        return self._mesh[dimension - 1]
+        """
+        :param dimension: Mesh dimension.
+        :return: Zinc Mesh; invalid if dimension not from 1 to 3.
+        """
+        return self._fieldmodule.findMeshByDimension(dimension)
 
     def getHighestDimensionMesh(self):
         """
         :return: Highest dimension mesh with elements in it, or None if none.
         """
-        for d in range(2, -1, -1):
-            mesh = self._mesh[d]
+        for dimension in range(3, 0, -1):
+            mesh = self._fieldmodule.findMeshByDimension(dimension)
             if mesh.getSize() > 0:
                 return mesh
         return None

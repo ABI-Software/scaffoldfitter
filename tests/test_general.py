@@ -2,6 +2,7 @@ import math
 import os
 import unittest
 from cmlibs.utils.zinc.field import createFieldMeshIntegral
+from cmlibs.zinc.context import Context
 from cmlibs.zinc.field import Field
 from cmlibs.zinc.result import RESULT_OK
 from scaffoldfitter.fitter import Fitter
@@ -94,94 +95,125 @@ class GeneralTestCase(unittest.TestCase):
         self.assertEqual(-1.0, config1.getGroupOutlierLength(None)[0])
 
     def test_fit_projection_subgroup(self):
-        zinc_model_file = os.path.join(here, "resources", "nerve_box.exf")
-        zinc_data_file = os.path.join(here, "resources", "nerve_path_data.exf")
-
-        fitter = Fitter(zinc_model_file, zinc_data_file)
-        fitter.setDiagnosticLevel(1)
-
-        fitter.load()
-        fieldmodule = fitter.getFieldmodule()
-        coordinates = fitter.getModelCoordinatesField()
-
-        config0 = fitter.getInitialFitterStepConfig()
-        self.assertEqual((None, False, False), config0.getGroupProjectionSubgroup(None))
-        centroid = fieldmodule.findFieldByName("centroid").castGroup()
-        self.assertTrue(centroid.isValid())
-        config0.setGroupProjectionSubgroup(None, centroid)
-        self.assertEqual((centroid, True, False), config0.getGroupProjectionSubgroup(None))
-        # don't want centroid to apply to edge group
-        self.assertEqual((centroid, False, True), config0.getGroupProjectionSubgroup("edge"))
-        config0.setGroupProjectionSubgroup("edge", None)
-        self.assertEqual((None, None, True), config0.getGroupProjectionSubgroup("edge"))
-        # must re-run initial configuration to use projection subgroup
-        config0.run()
-
-        align1 = FitterStepAlign()
-        fitter.addFitterStep(align1)
-        align1.setAlignManually(True)
-        align1.setRotation([0.0, 0.0, 0.0])
-        align1.setScale(1.179)
-        align1.setTranslation([0.251, 0.023, -0.01147])
-        align1.run()
-
-        fit2 = FitterStepFit()
-        fitter.addFitterStep(fit2)
-        fit2.setGroupStrainPenalty(None, [0.01])
-        fit2.setGroupCurvaturePenalty(None, [1.0])
-        fit2.setNumberOfIterations(2)
-        fit2.run()
-
-        config3 = FitterStepConfig()
-        fitter.addFitterStep(config3)
-        config3.setGroupOutlierLength("trunk", -0.5)
-        # switch subgroup centroid over to trunk group, which is equivalent
-        self.assertEqual((centroid, False, True), config3.getGroupProjectionSubgroup(None))
-        config3.setGroupProjectionSubgroup(None, None)
-        self.assertEqual((None, None, True), config3.getGroupProjectionSubgroup(None))
-        config3.clearGroupProjectionSubgroup(None)
-        self.assertEqual((centroid, False, True), config3.getGroupProjectionSubgroup(None))
-        config3.setGroupProjectionSubgroup(None, None)
-        self.assertEqual((None, None, True), config3.getGroupProjectionSubgroup(None))
-        self.assertEqual((None, False, True), config3.getGroupProjectionSubgroup("trunk"))
-        config3.setGroupProjectionSubgroup("trunk", centroid)
-        self.assertEqual((centroid, True, True), config3.getGroupProjectionSubgroup("trunk"))
-        config3.run()
-
-        fit4 = FitterStepFit()
-        fitter.addFitterStep(fit4)
-        fit4.setNumberOfIterations(2)
-        fit4.run()
-
-        TOL = 1.0E-7
-        rmsError, maxError = fitter.getDataRMSAndMaximumProjectionError()
-        minElementIdentifier, minJacobian = fitter.getLowestElementJacobian()
-        self.assertAlmostEqual(rmsError, 0.01788062932269768, delta=TOL)
-        self.assertAlmostEqual(maxError, 0.0660542949294517, delta=TOL)
-        self.assertEqual(minElementIdentifier, 2)
-        self.assertAlmostEqual(minJacobian, 1.165478981129574, delta=TOL)
-
-        # check all projected coordinates are to the centroid of the trunk
-        fieldcache = fieldmodule.createFieldcache()
-        activeDataNodeset = fitter.getActiveDataNodesetGroup()
-        dataHostLocation = fitter.getDataHostLocationField()
-        edge = fieldmodule.findFieldByName("edge").castGroup()
-        self.assertTrue(edge.isValid())
-        edgeData = edge.getNodesetGroup(fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS))
-        nodeiter = activeDataNodeset.createNodeiterator()
-        node = nodeiter.next()
-        while node.isValid():
-            fieldcache.setNode(node)
-            element, xi = dataHostLocation.evaluateMeshLocation(fieldcache, 3)
-            self.assertTrue(element.getIdentifier() in [1, 2])
-            self.assertTrue(0.0 <= xi[0] <= 1.0)
-            if edgeData.containsNode(node):
-                self.assertAlmostEqual(xi[1], 0.0, delta=TOL)
-                self.assertAlmostEqual(xi[2], 1.0, delta=TOL)
+        # index i chooses one of 2 ways to run the test:
+        # 0. From supplied model data files
+        # 1. With a user-supplied region into which the user builds model, loads data and performs fit
+        for i in range(2):
+            zinc_model_file_name = os.path.join(here, "resources", "nerve_box.exf")
+            zinc_data_file_name = os.path.join(here, "resources", "nerve_path_data.exf")
+            if i == 0:
+                # use fitter with model and data files
+                region = None
+                fitter = Fitter(zinc_model_file_name, zinc_data_file_name)
+                fitter.setDiagnosticLevel(1)
+                fitter.load()
+                # region = fitter.getRegion()
+                fieldmodule = fitter.getFieldmodule()
+                coordinates = fitter.getModelCoordinatesField()
             else:
-                self.assertTrue(0.0 <= xi[1] <= 1.0)
-                self.assertAlmostEqual(xi[2], 0.5, delta=TOL)
+                # use fitter with user-specified region; caller must build model, load data and set up fit
+                context = Context("Scaffoldfitter test")
+                region = context.getDefaultRegion()
+                fitter = Fitter(region=region)
+                fitter.setDiagnosticLevel(1)
+
+                region.readFile(zinc_model_file_name)
+                fieldmodule = region.getFieldmodule()
+                coordinates = fieldmodule.findFieldByName("coordinates").castFiniteElement()
+                self.assertEqual(coordinates.getNumberOfComponents(), 3)
+                fitter.setModelCoordinatesField(coordinates)
+                trunkGroup = fieldmodule.findFieldByName("trunk").castGroup()
+                fitter.setModelFitGroup(trunkGroup)
+                fitter.defineCommonMeshFields()
+
+                dataRegion = region.createChild("raw_data")
+                dataRegion.readFile(zinc_data_file_name)
+                fitter.transferData(dataRegion)
+                fitter.setDataCoordinatesField(coordinates)
+                markerGroup = fieldmodule.findFieldByName("marker").castGroup()
+                if markerGroup.isValid():
+                    fitter.setMarkerGroup(markerGroup)
+                fitter.defineDataProjectionFields()
+                fitter.initializeFit()
+
+            config0 = fitter.getInitialFitterStepConfig()
+            self.assertEqual((None, False, False), config0.getGroupProjectionSubgroup(None))
+            centroid = fieldmodule.findFieldByName("centroid").castGroup()
+            self.assertTrue(centroid.isValid())
+            config0.setGroupProjectionSubgroup(None, centroid)
+            self.assertEqual((centroid, True, False), config0.getGroupProjectionSubgroup(None))
+            # don't want centroid to apply to edge group
+            self.assertEqual((centroid, False, True), config0.getGroupProjectionSubgroup("edge"))
+            config0.setGroupProjectionSubgroup("edge", None)
+            self.assertEqual((None, None, True), config0.getGroupProjectionSubgroup("edge"))
+            # must re-run initial configuration to use projection subgroup
+            config0.run()
+
+            align1 = FitterStepAlign()
+            fitter.addFitterStep(align1)
+            align1.setAlignManually(True)
+            align1.setRotation([0.0, 0.0, 0.0])
+            align1.setScale(1.179)
+            align1.setTranslation([0.251, 0.023, -0.01147])
+            align1.run()
+
+            fit2 = FitterStepFit()
+            fitter.addFitterStep(fit2)
+            fit2.setGroupStrainPenalty(None, [0.01])
+            fit2.setGroupCurvaturePenalty(None, [1.0])
+            fit2.setNumberOfIterations(2)
+            fit2.run()
+
+            config3 = FitterStepConfig()
+            fitter.addFitterStep(config3)
+            config3.setGroupOutlierLength("trunk", -0.5)
+            # switch subgroup centroid over to trunk group, which is equivalent
+            self.assertEqual((centroid, False, True), config3.getGroupProjectionSubgroup(None))
+            config3.setGroupProjectionSubgroup(None, None)
+            self.assertEqual((None, None, True), config3.getGroupProjectionSubgroup(None))
+            config3.clearGroupProjectionSubgroup(None)
+            self.assertEqual((centroid, False, True), config3.getGroupProjectionSubgroup(None))
+            config3.setGroupProjectionSubgroup(None, None)
+            self.assertEqual((None, None, True), config3.getGroupProjectionSubgroup(None))
+            self.assertEqual((None, False, True), config3.getGroupProjectionSubgroup("trunk"))
+            config3.setGroupProjectionSubgroup("trunk", centroid)
+            self.assertEqual((centroid, True, True), config3.getGroupProjectionSubgroup("trunk"))
+            config3.run()
+
+            fit4 = FitterStepFit()
+            fitter.addFitterStep(fit4)
+            fit4.setNumberOfIterations(2)
+            fit4.run()
+
+            TOL = 1.0E-7
+            rmsError, maxError = fitter.getDataRMSAndMaximumProjectionError()
+            minElementIdentifier, minJacobian = fitter.getLowestElementJacobian()
+            self.assertAlmostEqual(rmsError, 0.01788062932269768, delta=TOL)
+            self.assertAlmostEqual(maxError, 0.0660542949294517, delta=TOL)
+            self.assertEqual(minElementIdentifier, 2)
+            self.assertAlmostEqual(minJacobian, 1.165478981129574, delta=TOL)
+
+            # check all projected coordinates are to the centroid of the trunk
+            fieldcache = fieldmodule.createFieldcache()
+            activeDataNodeset = fitter.getActiveDataNodesetGroup()
+            dataHostLocation = fitter.getDataHostLocationField()
+            edge = fieldmodule.findFieldByName("edge").castGroup()
+            self.assertTrue(edge.isValid())
+            edgeData = edge.getNodesetGroup(fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS))
+            nodeiter = activeDataNodeset.createNodeiterator()
             node = nodeiter.next()
+            while node.isValid():
+                fieldcache.setNode(node)
+                element, xi = dataHostLocation.evaluateMeshLocation(fieldcache, 3)
+                self.assertTrue(element.getIdentifier() in [1, 2])
+                self.assertTrue(0.0 <= xi[0] <= 1.0)
+                if edgeData.containsNode(node):
+                    self.assertAlmostEqual(xi[1], 0.0, delta=TOL)
+                    self.assertAlmostEqual(xi[2], 1.0, delta=TOL)
+                else:
+                    self.assertTrue(0.0 <= xi[1] <= 1.0)
+                    self.assertAlmostEqual(xi[2], 0.5, delta=TOL)
+                node = nodeiter.next()
 
 
 if __name__ == "__main__":
