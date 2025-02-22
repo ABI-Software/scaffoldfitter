@@ -2,6 +2,8 @@ import math
 import os
 import unittest
 from cmlibs.utils.zinc.field import createFieldMeshIntegral
+from cmlibs.utils.zinc.general import ChangeManager
+from cmlibs.utils.zinc.region import write_to_buffer, read_from_buffer
 from cmlibs.zinc.context import Context
 from cmlibs.zinc.field import Field
 from cmlibs.zinc.result import RESULT_OK
@@ -107,7 +109,7 @@ class GeneralTestCase(unittest.TestCase):
                 fitter = Fitter(zinc_model_file_name, zinc_data_file_name)
                 fitter.setDiagnosticLevel(1)
                 fitter.load()
-                # region = fitter.getRegion()
+                region = fitter.getRegion()
                 fieldmodule = fitter.getFieldmodule()
                 coordinates = fitter.getModelCoordinatesField()
             else:
@@ -215,6 +217,87 @@ class GeneralTestCase(unittest.TestCase):
                     self.assertAlmostEqual(xi[2], 0.5, delta=TOL)
                 node = nodeiter.next()
 
+            if i == 1:
+                # build more of the model and fit it to branch1 data
+                # transform the same nerve box model to align with branch1 and add it as new elements and nodes
+                tmpRegion = region.createRegion()
+                tmpRegion.readFile(zinc_model_file_name)
+                tmpFieldmodule = tmpRegion.getFieldmodule()
+                with ChangeManager(tmpFieldmodule):
+                    tmpCoordinates = tmpFieldmodule.findFieldByName("coordinates").castFiniteElement()
+                    newCoordinates = tmpFieldmodule.createFieldMatrixMultiply(
+                        3, tmpFieldmodule.createFieldConstant([0.0, -1.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.0, 1.0]),
+                        tmpCoordinates) + tmpFieldmodule.createFieldConstant([1.0, 0.0, 0.0])
+                    fieldassignment = tmpCoordinates.createFieldassignment(newCoordinates)
+                    fieldassignment.assign()
+                    # rename trunk -> branch1
+                    tmpGroup = tmpFieldmodule.findFieldByName("trunk").castGroup()
+                    tmpGroup.setName("branch1")
+                    # offset element, face, line and node numbers to not clash with trunk
+                    identifierOffset = 100
+                    maxObjectIdentifiers = [3, 42, 19, 2]
+                    for dimension in range(3, 0, -1):
+                        mesh = tmpFieldmodule.findMeshByDimension(dimension)
+                        for elementIdentifier in range(1, 101):
+                            element = mesh.findElementByIdentifier(elementIdentifier)
+                            if not element.isValid():
+                                self.assertEqual(elementIdentifier, maxObjectIdentifiers[dimension] + 1)
+                                break
+                            element.setIdentifier(elementIdentifier + identifierOffset)
+                    nodeset = tmpFieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_NODES)
+                    for nodeIdentifier in range(1, 101):
+                        node = nodeset.findNodeByIdentifier(nodeIdentifier)
+                        if not node.isValid():
+                            self.assertEqual(nodeIdentifier, maxObjectIdentifiers[0] + 1)
+                            break
+                        node.setIdentifier(nodeIdentifier + identifierOffset)
+                    # read into main region via in-memory EX file buffer
+                    buffer = write_to_buffer(tmpRegion, resource_domain_type=
+                        Field.DOMAIN_TYPE_NODES | Field.DOMAIN_TYPE_MESH1D |
+                        Field.DOMAIN_TYPE_MESH2D | Field.DOMAIN_TYPE_MESH3D)
+                    self.assertTrue(buffer is not None)
+                    self.assertEqual(read_from_buffer(region, buffer), RESULT_OK)
+
+                # move the edge data point to work for branch1 so solution is not singular
+                edgeGroup = fieldmodule.findFieldByName("edge").castGroup()
+                datapoints = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
+                edgeNodesetGroup = edgeGroup.getNodesetGroup(datapoints)
+                node = edgeNodesetGroup.createNodeiterator().next()
+                fieldcache = fieldmodule.createFieldcache()
+                fieldcache.setNode(node)
+                self.assertEqual(coordinates.assignReal(fieldcache, [1.0, 0.2, 0.095]), RESULT_OK)
+
+                # fit the branch with 1 new fit step
+                fitterb = Fitter(region=region)
+                fitterb.setDiagnosticLevel(1)
+                branch1Group = fieldmodule.findFieldByName("branch1").castGroup()
+                fitterb.setModelCoordinatesField(coordinates)
+                fitterb.setModelFitGroup(branch1Group)
+                fitterb.defineCommonMeshFields()
+
+                config0b = fitterb.getInitialFitterStepConfig()
+                config0b.setGroupProjectionSubgroup("branch1", centroid)
+                self.assertEqual((centroid, True, False), config0b.getGroupProjectionSubgroup("branch1"))
+                fitterb.setDataCoordinatesField(coordinates)
+                markerGroup = fieldmodule.findFieldByName("marker").castGroup()
+                if markerGroup.isValid():
+                    fitterb.setMarkerGroup(markerGroup)
+                fitterb.defineDataProjectionFields()
+                fitterb.initializeFit()
+
+                fit1b = FitterStepFit()
+                fitterb.addFitterStep(fit1b)
+                fit1b.setGroupStrainPenalty(None, [0.1])
+                fit1b.setGroupCurvaturePenalty(None, [0.1])
+                fit1b.setNumberOfIterations(3)
+                fit1b.run()
+
+                rmsError, maxError = fitterb.getDataRMSAndMaximumProjectionError()
+                minElementIdentifier, minJacobian = fitterb.getLowestElementJacobian()
+                self.assertAlmostEqual(rmsError, 0.02347727286951435, delta=TOL)
+                self.assertAlmostEqual(maxError, 0.04547098724783385, delta=TOL)
+                self.assertEqual(minElementIdentifier, 102)
+                self.assertAlmostEqual(minJacobian, 0.8073661446227143, delta=TOL)
 
 if __name__ == "__main__":
     unittest.main()
