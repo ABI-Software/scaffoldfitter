@@ -12,6 +12,7 @@ from cmlibs.utils.zinc.finiteelement import (
     evaluate_field_nodeset_range, findNodeWithName, get_scalar_field_minimum_in_mesh)
 from cmlibs.utils.zinc.group import match_fitting_group_names
 from cmlibs.utils.zinc.general import ChangeManager
+from cmlibs.utils.zinc.mesh import element_or_ancestor_is_in_mesh
 from cmlibs.utils.zinc.region import copy_fitting_data
 from cmlibs.zinc.context import Context
 from cmlibs.zinc.element import Elementbasis, Elementfieldtemplate
@@ -1668,18 +1669,3 @@ class Fitter:
         sr = sir.createStreamresourceFile(fileName)
         sir.setResourceDomainTypes(sr, Field.DOMAIN_TYPE_DATAPOINTS)
         self._region.write(sir)
-
-
-def element_or_ancestor_is_in_mesh(element, mesh):
-    """
-    Query whether element has a face mapping from any element in mesh.
-    :param element: Element to query.
-    :param mesh: Equal or higher dimension ancestor mesh or mesh group to check.
-    :return: True if element or any parent/ancestor is in modelFitMesh.
-    """
-    if mesh.containsElement(element):
-        return True
-    for p in range(1, element.getNumberOfParents() + 1):
-        if element_or_ancestor_is_in_mesh(element.getParentElement(p), mesh):
-            return True
-    return False
