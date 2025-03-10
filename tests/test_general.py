@@ -1,9 +1,10 @@
-import math
+import logging
 import os
+import sys
 import unittest
 from cmlibs.utils.zinc.field import createFieldMeshIntegral
 from cmlibs.utils.zinc.general import ChangeManager
-from cmlibs.utils.zinc.region import write_to_buffer, read_from_buffer
+from cmlibs.utils.zinc.region import copy_fitting_data, read_from_buffer, write_to_buffer
 from cmlibs.zinc.context import Context
 from cmlibs.zinc.field import Field
 from cmlibs.zinc.result import RESULT_OK
@@ -13,6 +14,9 @@ from scaffoldfitter.fitterstepconfig import FitterStepConfig
 from scaffoldfitter.fitterstepfit import FitterStepFit
 
 here = os.path.abspath(os.path.dirname(__file__))
+
+
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 
 
 class GeneralTestCase(unittest.TestCase):
@@ -130,7 +134,7 @@ class GeneralTestCase(unittest.TestCase):
 
                 dataRegion = region.createChild("raw_data")
                 dataRegion.readFile(zinc_data_file_name)
-                fitter.transferData(dataRegion)
+                copy_fitting_data(region, dataRegion)
                 fitter.setDataCoordinatesField(coordinates)
                 markerGroup = fieldmodule.findFieldByName("marker").castGroup()
                 if markerGroup.isValid():

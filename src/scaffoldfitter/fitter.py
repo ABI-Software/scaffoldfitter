@@ -5,12 +5,14 @@ Main class for fitting scaffolds.
 import json
 
 from cmlibs.maths.vectorops import add, mult, sub
-from cmlibs.utils.zinc.field import assignFieldParameters, createFieldFiniteElementClone, getGroupList, \
-    findOrCreateFieldFiniteElement, findOrCreateFieldStoredMeshLocation, getUniqueFieldName, orphanFieldByName, \
-    create_jacobian_determinant_field
-from cmlibs.utils.zinc.finiteelement import evaluate_field_nodeset_range, findNodeWithName, get_scalar_field_minimum_in_mesh
+from cmlibs.utils.zinc.field import (
+    assignFieldParameters, createFieldFiniteElementClone, getGroupList, findOrCreateFieldFiniteElement,
+    findOrCreateFieldStoredMeshLocation, getUniqueFieldName, orphanFieldByName, create_jacobian_determinant_field)
+from cmlibs.utils.zinc.finiteelement import (
+    evaluate_field_nodeset_range, findNodeWithName, get_scalar_field_minimum_in_mesh)
+from cmlibs.utils.zinc.group import match_fitting_group_names
 from cmlibs.utils.zinc.general import ChangeManager
-from cmlibs.utils.zinc.region import write_to_buffer, read_from_buffer
+from cmlibs.utils.zinc.region import copy_fitting_data
 from cmlibs.zinc.context import Context
 from cmlibs.zinc.element import Elementbasis, Elementfieldtemplate
 from cmlibs.zinc.field import Field, FieldFindMeshLocation, FieldGroup
@@ -439,86 +441,18 @@ class Fitter:
                 self._activeDataProjectionGroupFields.append(activeDataProjectionGroupField)
                 self._activeDataProjectionMeshGroups.append(activeDataProjectionGroupField.getOrCreateMeshGroup(mesh))
 
-    def transferData(self, dataRegion):
-        """
-        Transfer data from dataRegion to fit region, converting nodes to data points.
-        :param dataRegion: Zinc Region containing data; contour points are nodes, marker points are datapoints.
-        """
-        fieldmodule = dataRegion.getFieldmodule()
-        with ChangeManager(fieldmodule):
-            # if there are both nodes and datapoints, offset datapoint identifiers to ensure different
-            nodes = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_NODES)
-            if nodes.getSize() > 0:
-                datapoints = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
-                if datapoints.getSize() > 0:
-                    datapoint_iterator = datapoints.createNodeiterator()
-                    datapoint = datapoint_iterator.next()
-                    latest = 1
-                    datapoint_new_identifier_map = {}
-                    while datapoint.isValid():
-                        identifier = _next_available_identifier(nodes, latest)
-                        datapoint_new_identifier_map[identifier] = datapoint
-                        latest = identifier + 1
-                        datapoint = datapoint_iterator.next()
-
-                    for new_identifier, datapoint in datapoint_new_identifier_map.items():
-                        datapoint.setIdentifier(new_identifier)
-
-                # transfer nodes as datapoints to self._region
-                buffer = write_to_buffer(dataRegion, resource_domain_type=Field.DOMAIN_TYPE_NODES)
-                assert buffer is not None, "Failed to write nodes"
-                buffer = buffer.replace(bytes("!#nodeset nodes", "utf-8"), bytes("!#nodeset datapoints", "utf-8"))
-                result = read_from_buffer(self._region, buffer)
-                if result != RESULT_OK:
-                    print("Node to datapoints log:")
-                    self.print_log()
-                    raise AssertionError("Failed to load nodes as datapoints")
-            # transfer datapoints to self._region
-            buffer = write_to_buffer(dataRegion, resource_domain_type=Field.DOMAIN_TYPE_DATAPOINTS)
-            assert buffer is not None, "Failed to write datapoints"
-            result = read_from_buffer(self._region, buffer)
-            if result != RESULT_OK:
-                self.print_log()
-                raise AssertionError("Failed to load datapoints, result " + str(result))
-
     def _loadData(self):
         """
         Load zinc data file into self._rawDataRegion & transfer as data points to fit region.
         Rename data groups to exactly match model groups where they differ by case and whitespace only.
-        Transfer data points (and converted nodes) into self._region.
         """
         result = self._rawDataRegion.readFile(self._zincDataFileName)
         assert result == RESULT_OK, "Failed to load data file " + str(self._zincDataFileName)
-        fieldmodule = self._rawDataRegion.getFieldmodule()
-        with ChangeManager(fieldmodule):
-            # rename data groups to match model
-            # future: match with annotation terms
-            modelGroupNames = [group.getName() for group in getGroupList(self._fieldmodule)]
-            writeDiagnostics = self.getDiagnosticLevel() > 0
-            for dataGroup in getGroupList(fieldmodule):
-                dataGroupName = dataGroup.getName()
-                compareName = dataGroupName.strip().casefold()
-                for modelGroupName in modelGroupNames:
-                    if modelGroupName == dataGroupName:
-                        if writeDiagnostics:
-                            print("Load data: Data group '" + dataGroupName + "' found in model")
-                        break
-                    elif modelGroupName.strip().casefold() == compareName:
-                        result = dataGroup.setName(modelGroupName)
-                        if result == RESULT_OK:
-                            if writeDiagnostics:
-                                print("Load data: Data group '" + dataGroupName + "' found in model as '" +
-                                      modelGroupName + "'. Renaming to match.")
-                        else:
-                            print("Error: Load data: Data group '" + dataGroupName + "' found in model as '" +
-                                  modelGroupName + "'. Renaming to match FAILED.")
-                            if fieldmodule.findFieldByName(modelGroupName).isValid():
-                                print("    Reason: field of that name already exists.")
-                        break
-                else:
-                    if writeDiagnostics:
-                        print("Load data: Data group '" + dataGroupName + "' not found in model")
-            self.transferData(self._rawDataRegion)
+        data_fieldmodule = self._rawDataRegion.getFieldmodule()
+        with ChangeManager(data_fieldmodule):
+            match_fitting_group_names(data_fieldmodule, self._fieldmodule,
+                                      log_diagnostics=self.getDiagnosticLevel() > 0)
+            copy_fitting_data(self._region, self._rawDataRegion)
         self._discoverDataCoordinatesField()
         self._discoverMarkerGroup()
 

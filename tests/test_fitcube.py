@@ -1,5 +1,7 @@
+import logging
 import math
 import os
+import sys
 import unittest
 from cmlibs.utils.zinc.field import createFieldMeshIntegral
 from cmlibs.utils.zinc.finiteelement import evaluate_field_nodeset_mean, find_node_with_name, evaluate_field_nodeset_range
@@ -14,7 +16,11 @@ from scaffoldfitter.fitterstepalign import FitterStepAlign, createFieldsTransfor
 from scaffoldfitter.fitterstepconfig import FitterStepConfig
 from scaffoldfitter.fitterstepfit import FitterStepFit
 
+
 here = os.path.abspath(os.path.dirname(__file__))
+
+
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 
 
 def assertAlmostEqualList(testcase, actualList, expectedList, delta):
