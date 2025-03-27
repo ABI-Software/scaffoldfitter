@@ -5,15 +5,19 @@ Main class for fitting scaffolds.
 import json
 
 from cmlibs.maths.vectorops import add, mult, sub
-from cmlibs.utils.zinc.field import assignFieldParameters, createFieldFiniteElementClone, getGroupList, \
-    findOrCreateFieldFiniteElement, findOrCreateFieldStoredMeshLocation, getUniqueFieldName, orphanFieldByName, \
-    create_jacobian_determinant_field
-from cmlibs.utils.zinc.finiteelement import evaluate_field_nodeset_range, findNodeWithName, get_scalar_field_minimum_in_mesh
+from cmlibs.utils.zinc.field import (
+    assignFieldParameters, createFieldFiniteElementClone, getGroupList, findOrCreateFieldFiniteElement,
+    findOrCreateFieldStoredMeshLocation, getUniqueFieldName, orphanFieldByName, create_jacobian_determinant_field)
+from cmlibs.utils.zinc.finiteelement import (
+    evaluate_field_nodeset_range, findNodeWithName, get_scalar_field_minimum_in_mesh)
+from cmlibs.utils.zinc.group import match_fitting_group_names
 from cmlibs.utils.zinc.general import ChangeManager
-from cmlibs.utils.zinc.region import write_to_buffer, read_from_buffer
+from cmlibs.utils.zinc.mesh import element_or_ancestor_is_in_mesh
+from cmlibs.utils.zinc.region import copy_fitting_data
 from cmlibs.zinc.context import Context
 from cmlibs.zinc.element import Elementbasis, Elementfieldtemplate
 from cmlibs.zinc.field import Field, FieldFindMeshLocation, FieldGroup
+from cmlibs.zinc.region import Region
 from cmlibs.zinc.result import RESULT_OK, RESULT_WARNING_PART_DONE
 
 from scaffoldfitter.fitterexceptions import FitterModelCoordinateField
@@ -32,19 +36,28 @@ def _next_available_identifier(node_set, candidate):
 
 class Fitter:
 
-    def __init__(self, zincModelFileName: str, zincDataFileName: str):
+    def __init__(self, zincModelFileName: str=None, zincDataFileName: str=None, region: Region=None):
         """
-        :param zincModelFileName: Name of zinc file supplying model to fit.
-        :param zincDataFileName: Name of zinc filed supplying data to fit to.
+        Create instance of Fitter either from model and data file names, or the model/fit region.
+        :param zincModelFileName: Name of zinc file supplying model to fit, or None if supplying region.
+        :param zincDataFileName: Name of zinc filed supplying data to fit to, or None if supplying region.
+        :param region: Region in which to build model and perform fitting, or None if supplying file names.
         """
         self._zincModelFileName = zincModelFileName
         self._zincDataFileName = zincDataFileName
-        self._context = Context("Scaffoldfitter")
+        if region:
+            assert (zincModelFileName is None) and (zincDataFileName is None)
+            self._context = region.getContext()
+            self._region = region
+            self._fieldmodule = region.getFieldmodule()
+        else:
+            assert region is None
+            self._context = Context("Scaffoldfitter")
+            self._region = None  # created by call to load()
+            self._fieldmodule = None
         self._zincVersion = self._context.getVersion()[1]
         self._logger = self._context.getLogger()
-        self._region = None
         self._rawDataRegion = None
-        self._fieldmodule = None
         self._modelCoordinatesField = None
         self._modelCoordinatesFieldName = None
         self._modelReferenceCoordinatesField = None
@@ -57,7 +70,6 @@ class Fitter:
         self._flattenGroupName = None
         self._dataCoordinatesField = None
         self._dataCoordinatesFieldName = None
-        self._mesh = []  # [dimension - 1]
         self._dataHostLocationField = None  # stored mesh location field in highest dimension mesh for all data, markers
         self._dataHostCoordinatesField = None  # embedded field giving host coordinates at data location
         self._dataDeltaField = None  # self._dataHostCoordinatesField - self._markerDataCoordinatesField
@@ -99,6 +111,7 @@ class Fitter:
         self._dataCentre = [0.0, 0.0, 0.0]
         self._dataScale = 1.0
         self._diagnosticLevel = 0
+        self._groupProjectionData = {}  # map(group name) to (subgroup, projectionMeshGroup, findHighestDimension)
         # must always have an initial FitterStepConfig - which can never be removed
         self._fitterSteps = []
         fitterStep = FitterStepConfig()
@@ -244,7 +257,6 @@ class Fitter:
         self._fibreField = None
         self._flattenGroup = None
         self._dataCoordinatesField = None
-        self._mesh = []
         self._dataHostLocationField = None
         self._dataHostCoordinatesField = None
         self._dataDeltaField = None
@@ -276,12 +288,15 @@ class Fitter:
         self._curvatureActiveMeshGroup = None
         self._strainPenaltyField = None
         self._curvaturePenaltyField = None
+        self._groupProjectionData = {}
 
     def load(self):
         """
         Read model and data and define fit fields and data.
         Can call again to reset fit, after parameters have changed.
+        Must not call this function if model and data files not supplied to constructor!
         """
+        assert self._zincModelFileName and self._zincDataFileName
         self._clearFields()
         self._region = self._context.createRegion()
         self._region.setName("model_region")
@@ -289,7 +304,14 @@ class Fitter:
         self._rawDataRegion = self._region.createChild("raw_data")
         self._loadModel()
         self._loadData()
-        self._defineDataProjectionFields()
+        self.defineDataProjectionFields()
+        self.initializeFit()
+
+    def initializeFit(self):
+        """
+        Call after model and data are in memory, to calculate data range, mark any existing
+        fitter steps as not run, and run the initial config step to calculate initial data projections.
+        """
         # Get centre and scale of data coordinates to manage fitting tolerances and steps.
         datapoints = self._fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
         minimums, maximums = evaluate_field_nodeset_range(self._dataCoordinatesField, datapoints)
@@ -314,7 +336,7 @@ class Fitter:
         """
         return self._dataScale
 
-    def _defineCommonMeshFields(self):
+    def defineCommonMeshFields(self):
         """
         Defines fields for storing per-element strain and curvature penalties
         plus active mesh groups for each.
@@ -369,12 +391,11 @@ class Fitter:
     def _loadModel(self):
         result = self._region.readFile(self._zincModelFileName)
         assert result == RESULT_OK, "Failed to load model file" + str(self._zincModelFileName)
-        self._mesh = [self._fieldmodule.findMeshByDimension(d + 1) for d in range(3)]
         self._discoverModelCoordinatesField()
         self._discoverModelFitGroup()
         self._discoverFibreField()
         self._discoverFlattenGroup()
-        self._defineCommonMeshFields()
+        self.defineCommonMeshFields()
 
     def _defineCommonDataFields(self):
         """
@@ -411,7 +432,7 @@ class Fitter:
             self._activeDataProjectionGroupFields = []
             self._activeDataProjectionMeshGroups = []
             for d in range(2):
-                mesh = self._mesh[d]
+                mesh = self.getMesh(d + 1)
                 activeDataProjectionGroupName = "active_data." + mesh.getName()
                 activeDataProjectionGroupField = \
                     self._fieldmodule.findFieldByName(activeDataProjectionGroupName).castGroup()
@@ -423,81 +444,24 @@ class Fitter:
 
     def _loadData(self):
         """
-        Load zinc data file into self._rawDataRegion.
+        Load zinc data file into self._rawDataRegion & transfer as data points to fit region.
         Rename data groups to exactly match model groups where they differ by case and whitespace only.
-        Transfer data points (and converted nodes) into self._region.
         """
         result = self._rawDataRegion.readFile(self._zincDataFileName)
         assert result == RESULT_OK, "Failed to load data file " + str(self._zincDataFileName)
-        fieldmodule = self._rawDataRegion.getFieldmodule()
-        with ChangeManager(fieldmodule):
-            # rename data groups to match model
-            # future: match with annotation terms
-            modelGroupNames = [group.getName() for group in getGroupList(self._fieldmodule)]
-            writeDiagnostics = self.getDiagnosticLevel() > 0
-            for dataGroup in getGroupList(fieldmodule):
-                dataGroupName = dataGroup.getName()
-                compareName = dataGroupName.strip().casefold()
-                for modelGroupName in modelGroupNames:
-                    if modelGroupName == dataGroupName:
-                        if writeDiagnostics:
-                            print("Load data: Data group '" + dataGroupName + "' found in model")
-                        break
-                    elif modelGroupName.strip().casefold() == compareName:
-                        result = dataGroup.setName(modelGroupName)
-                        if result == RESULT_OK:
-                            if writeDiagnostics:
-                                print("Load data: Data group '" + dataGroupName + "' found in model as '" +
-                                      modelGroupName + "'. Renaming to match.")
-                        else:
-                            print("Error: Load data: Data group '" + dataGroupName + "' found in model as '" +
-                                  modelGroupName + "'. Renaming to match FAILED.")
-                            if fieldmodule.findFieldByName(modelGroupName).isValid():
-                                print("    Reason: field of that name already exists.")
-                        break
-                else:
-                    if writeDiagnostics:
-                        print("Load data: Data group '" + dataGroupName + "' not found in model")
-            # if there are both nodes and datapoints, offset datapoint identifiers to ensure different
-            nodes = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_NODES)
-            if nodes.getSize() > 0:
-                datapoints = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
-                if datapoints.getSize() > 0:
-                    datapoint_iterator = datapoints.createNodeiterator()
-                    datapoint = datapoint_iterator.next()
-                    latest = 1
-                    datapoint_new_identifier_map = {}
-                    while datapoint.isValid():
-                        identifier = _next_available_identifier(nodes, latest)
-                        datapoint_new_identifier_map[identifier] = datapoint
-                        latest = identifier + 1
-                        datapoint = datapoint_iterator.next()
-
-                    for new_identifier, datapoint in datapoint_new_identifier_map.items():
-                        datapoint.setIdentifier(new_identifier)
-
-                # transfer nodes as datapoints to self._region
-                buffer = write_to_buffer(self._rawDataRegion, resource_domain_type=Field.DOMAIN_TYPE_NODES)
-                assert buffer is not None, "Failed to write nodes"
-                buffer = buffer.replace(bytes("!#nodeset nodes", "utf-8"), bytes("!#nodeset datapoints", "utf-8"))
-                result = read_from_buffer(self._region, buffer)
-                if result != RESULT_OK:
-                    print("Node to datapoints log:")
-                    self.print_log()
-                    raise AssertionError("Failed to load nodes as datapoints")
-        # transfer datapoints to self._region
-        buffer = write_to_buffer(self._rawDataRegion, resource_domain_type=Field.DOMAIN_TYPE_DATAPOINTS)
-        assert buffer is not None, "Failed to write datapoints"
-        result = read_from_buffer(self._region, buffer)
-        if result != RESULT_OK:
-            self.print_log()
-            raise AssertionError("Failed to load datapoints, result " + str(result))
+        data_fieldmodule = self._rawDataRegion.getFieldmodule()
+        with ChangeManager(data_fieldmodule):
+            match_fitting_group_names(data_fieldmodule, self._fieldmodule,
+                                      log_diagnostics=self.getDiagnosticLevel() > 0)
+            copy_fitting_data(self._region, self._rawDataRegion)
         self._discoverDataCoordinatesField()
         self._discoverMarkerGroup()
 
     def run(self, endStep=None, modelFileNameStem=None, reorder=False):
         """
         Run either all remaining fitter steps or up to specified end step.
+        Only call this to run to a previous step if Fitter is working with model and data files;
+        see __init__().
         :param endStep: Last fitter step to run, or None to run all.
         :param modelFileNameStem: File name stem for writing intermediate model files.
         :param reorder: Reload if reordering.
@@ -642,8 +606,8 @@ class Fitter:
                 dataGroup = self.getGroupDataProjectionNodesetGroup(group)
                 if not dataGroup:
                     continue
-                meshGroup = self.getGroupDataProjectionMeshGroup(group)
-                meshDimension = meshGroup.getDimension()
+                meshGroup = self.getGroupDataProjectionMeshGroup(group, fitterStepFit)[0]
+                meshDimension = meshGroup.getDimension() if meshGroup else 0
                 if (meshDimension < 1) or (meshDimension > 2):
                     continue
                 dataWeight = fitterStepFit.getGroupDataWeight(groupName)[0]
@@ -1113,6 +1077,7 @@ class Fitter:
         """
         if (self._modelFitGroup is not None) and (modelFitGroup == self._modelFitGroup):
             return
+        self._groupProjectionData = {}  # as this affects intersection groups
         fieldGroup = modelFitGroup.castGroup() if modelFitGroup else None
         assert (fieldGroup is None) or fieldGroup.isValid()
         if fieldGroup:
@@ -1207,21 +1172,21 @@ class Fitter:
             self._fieldmodule, "data_projection_orientation",
             components_count=coordinatesCount*coordinatesCount)
 
-    def _defineDataProjectionFields(self):
+    def defineDataProjectionFields(self):
         self._dataProjectionGroupNames = []
         self._dataProjectionNodeGroupFields = []
         self._dataProjectionNodesetGroups = []
         with ChangeManager(self._fieldmodule):
             datapoints = self._fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
             for d in range(2):
-                mesh = self._mesh[d]  # mesh1d, mesh2d
+                mesh = self.getMesh(d + 1)  # mesh1d, mesh2d
                 group = self._fieldmodule.createFieldGroup()
                 group.setName(getUniqueFieldName(self._fieldmodule, "data_projection_group_" + mesh.getName()))
                 self._dataProjectionNodeGroupFields.append(group)
                 self._dataProjectionNodesetGroups.append(group.createNodesetGroup(datapoints))
             self._defineDataProjectionOrientationField()
 
-    def calculateGroupDataProjections(self, fieldcache, group, dataGroup, meshGroup, meshLocation,
+    def calculateGroupDataProjections(self, fieldcache, group, dataGroup, meshGroup, findHighestDimension, meshLocation,
                                       activeFitterStepConfig: FitterStepConfig):
         """
         Project data points for group. Assumes called while ChangeManager is active for fieldmodule.
@@ -1229,6 +1194,8 @@ class Fitter:
         :param group: The FieldGroup being fitted (parent of dataGroup, meshGroup).
         :param dataGroup: Nodeset group containing data points to project.
         :param meshGroup: MeshGroup containing surfaces/lines to project onto.
+        :param findHighestDimension: Set to True if mesh group does not have a parent/ancestor map to highest dimension
+        model fit mesh, requiring an EXACT re-projection of the coordinates at the NEAREST location on meshGroup.
         :param meshLocation: FieldStoredMeshLocation to store found location in on highest dimension mesh.
         :param activeFitterStepConfig: Where to get current projection modes from.
         """
@@ -1274,10 +1241,21 @@ class Fitter:
         if self._modelFitGroup:
             storeMesh = self._modelFitGroup.getMeshGroup(storeMesh)
             assert storeMesh.isValid(), "Model fit group is wrong dimension"
-        findLocation = self._fieldmodule.createFieldFindMeshLocation(
-            dataCoordinates, self._modelCoordinatesField, storeMesh)
-        assert RESULT_OK == findLocation.setSearchMesh(meshGroup)
-        findLocation.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
+        if findHighestDimension:
+            # find nearest on search mesh, then find exact on store mesh from projected coordinates
+            findLocation1 = self._fieldmodule.createFieldFindMeshLocation(
+                dataCoordinates, self._modelCoordinatesField, meshGroup)
+            findLocation1.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
+            projectedCoordinates = self._fieldmodule.createFieldEmbedded(self._modelCoordinatesField, findLocation1)
+            findLocation = self._fieldmodule.createFieldFindMeshLocation(
+                projectedCoordinates, self._modelCoordinatesField, storeMesh)
+            findLocation.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_EXACT)
+        else:
+            # automatic map from search mesh to store mesh
+            findLocation = self._fieldmodule.createFieldFindMeshLocation(
+                dataCoordinates, self._modelCoordinatesField, storeMesh)
+            assert RESULT_OK == findLocation.setSearchMesh(meshGroup)
+            findLocation.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
         nodeIter = dataGroup.createNodeiterator()
         node = nodeIter.next()
         dataProportionCounter = 0.5
@@ -1325,17 +1303,69 @@ class Fitter:
             return dataNodesetGroup
         return None
 
-    def getGroupDataProjectionMeshGroup(self, group: FieldGroup):
+    def getGroupDataProjectionMeshGroup(self, group: FieldGroup, fitterStep: FitterStep):
         """
-        Get mesh group for 2D if not 1D mesh containing elements
-        for projecting data in group, if any.
-        :return: MeshGroup or None if none or empty
+        Get mesh group for 2D if not 1D mesh containing elements for projecting data in group, if any.
+        If there is a subgroup set or inherited by the group, finds or builds on demand an equal or lower
+        dimensional intersection mesh group.
+        :group: Zinc annotation group for which to get projection mesh group.
+        :fitterStep: FitterStep to get config for, with optional subgroup to intersect with.
+        :return: MeshGroup or None if none or empty, findHighestDimension.
+        The second argument is True if any of the mesh group doesn't have a child-parent[-grandparent]
+        map to highest dimension elements in the model or model fit group, and hence projections must be
+        re-found on the top-level mesh group.
         """
-        for meshDimension in range(2, 0, -1):
-            meshGroup = group.getMeshGroup(self._mesh[meshDimension - 1])
-            if meshGroup.isValid() and (meshGroup.getSize() > 0):
-                return meshGroup
-        return None
+        groupName = group.getName()
+        activeFitterStepConfig = self.getActiveFitterStepConfig(fitterStep)
+        subgroup = activeFitterStepConfig.getGroupProjectionSubgroup(groupName)[0]
+        groupProjectionData = self._groupProjectionData.get(groupName)
+        if groupProjectionData:
+            if (groupProjectionData[0] == subgroup):
+                return groupProjectionData[1], groupProjectionData[2]
+        returnMeshGroup = None
+        findHighestDimension = False
+        with ChangeManager(self._fieldmodule):
+            if groupProjectionData:
+                del self._groupProjectionData[groupName]  # cleans up field references if subgroup changed
+            highestDimensionMesh = self.getHighestDimensionMesh()
+            highestDimension = highestDimensionMesh.getDimension()
+
+            for meshDimension in range(2, 0, -1):
+                if meshDimension > highestDimension:
+                    continue
+                mesh = self.getMesh(meshDimension)
+                meshGroup = group.getMeshGroup(mesh)
+                if meshGroup.isValid() and (meshGroup.getSize() > 0):
+                    if subgroup:
+                        subgroupMeshGroup = subgroup.getMeshGroup(mesh)
+                        if subgroupMeshGroup.isValid() and (subgroupMeshGroup.getSize() > 0):
+                            intersectionGroup = self._fieldmodule.createFieldGroup()
+                            intersectionGroup.setName(groupName + " " + subgroup.getName())  # for debugging
+                            returnMeshGroup = intersectionGroup.createMeshGroup(mesh)
+                            returnMeshGroup.addElementsConditional(self._fieldmodule.createFieldAnd(group, subgroup))
+                            if returnMeshGroup.getSize() > 0:
+                                break
+                            del intersectionGroup
+                            returnMeshGroup = None
+                    else:
+                        returnMeshGroup = meshGroup
+                        break
+        if returnMeshGroup:
+            # do any elements in returnMeshGroup NOT have self or an ancestor in modelFitMesh?
+            # If so, need to find highest dimension mesh location by a second FindMeshLocation field when projecting
+            modelFitMesh = highestDimensionMesh
+            if self._modelFitGroup:
+                modelFitMesh = self._modelFitGroup.getMeshGroup(highestDimensionMesh)
+            elementiterator = returnMeshGroup.createElementiterator()
+            element = elementiterator.next()
+            while element.isValid():
+                if not element_or_ancestor_is_in_mesh(element, modelFitMesh):
+                    findHighestDimension = True
+                    break
+                element = elementiterator.next()
+        self._groupProjectionData[groupName] = (subgroup, returnMeshGroup, findHighestDimension)
+
+        return returnMeshGroup, findHighestDimension
 
     def calculateDataProjections(self, fitterStep: FitterStep):
         """
@@ -1365,7 +1395,7 @@ class Fitter:
                 dataGroup = self.getGroupDataProjectionNodesetGroup(group)
                 if not dataGroup:
                     continue
-                meshGroup = self.getGroupDataProjectionMeshGroup(group)
+                meshGroup, findHighestDimension = self.getGroupDataProjectionMeshGroup(group, fitterStep)
                 if not meshGroup:
                     if self.getDiagnosticLevel() > 0:
                         if group != self._markerGroup:
@@ -1391,8 +1421,8 @@ class Fitter:
                         node.merge(nodetemplate)
                         node = nodeIter.next()
                     del nodetemplate
-                self.calculateGroupDataProjections(fieldcache, group, dataGroup, meshGroup, self._dataHostLocationField,
-                                                   activeFitterStepConfig)
+                self.calculateGroupDataProjections(fieldcache, group, dataGroup, meshGroup, findHighestDimension,
+                                                   self._dataHostLocationField, activeFitterStepConfig)
                 # add elements being projected onto to active group for mesh dimension
                 self._activeDataProjectionMeshGroups[meshGroup.getDimension() - 1].addElementsConditional(group)
 
@@ -1558,15 +1588,18 @@ class Fitter:
         return self._fitterSteps
 
     def getMesh(self, dimension):
-        assert 1 <= dimension <= 3
-        return self._mesh[dimension - 1]
+        """
+        :param dimension: Mesh dimension.
+        :return: Zinc Mesh; invalid if dimension not from 1 to 3.
+        """
+        return self._fieldmodule.findMeshByDimension(dimension)
 
     def getHighestDimensionMesh(self):
         """
         :return: Highest dimension mesh with elements in it, or None if none.
         """
-        for d in range(2, -1, -1):
-            mesh = self._mesh[d]
+        for dimension in range(3, 0, -1):
+            mesh = self._fieldmodule.findMeshByDimension(dimension)
             if mesh.getSize() > 0:
                 return mesh
         return None

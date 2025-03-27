@@ -1,5 +1,6 @@
-import math
+import logging
 import os
+import sys
 import unittest
 from cmlibs.utils.zinc.field import createFieldMeshIntegral
 from cmlibs.zinc.result import RESULT_OK
@@ -7,6 +8,9 @@ from scaffoldfitter.fitter import Fitter
 from scaffoldfitter.fitterstepfit import FitterStepFit
 
 here = os.path.abspath(os.path.dirname(__file__))
+
+
+logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
 
 
 class Fit2dTestCase(unittest.TestCase):

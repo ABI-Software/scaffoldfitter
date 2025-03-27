@@ -16,7 +16,7 @@ authors = [
 ]
 dependencies = [
     "cmlibs.maths >= 0.6.2",
-    "cmlibs.utils >= 0.11.2",
+    "cmlibs.utils >= 0.12.0",
     "cmlibs.zinc >= 4.1"
 ]
 description = "Scaffold/model geometric fitting library using Zinc."
