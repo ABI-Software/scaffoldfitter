@@ -109,7 +109,6 @@ class GeneralTestCase(unittest.TestCase):
             zinc_data_file_name = os.path.join(here, "resources", "nerve_path_data.exf")
             if i == 0:
                 # use fitter with model and data files
-                region = None
                 fitter = Fitter(zinc_model_file_name, zinc_data_file_name)
                 fitter.setDiagnosticLevel(1)
                 fitter.load()
