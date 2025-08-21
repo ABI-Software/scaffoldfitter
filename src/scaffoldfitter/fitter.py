@@ -156,6 +156,8 @@ class Fitter:
         :return: String JSON encoding of Fitter settings.
         """
         dct = {
+            "id": "scaffold fitter settings",
+            "version": "1.0.0",
             "modelCoordinatesField": self._modelCoordinatesFieldName,
             "modelFitGroup": self._modelFitGroupName,
             "fibreField": self._fibreFieldName,
