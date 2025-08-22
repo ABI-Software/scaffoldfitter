@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 import os
@@ -229,6 +230,18 @@ class FitCubeToSphereTestCase(unittest.TestCase):
 
         # test json serialisation
         s = fitter.encodeSettingsJSON()
+        settings_dct = json.loads(s)
+        self.assertEqual(len(settings_dct), 10)
+        self.assertEqual(settings_dct['id'], 'scaffold fitter settings')
+        self.assertEqual(settings_dct['version'], '1.0.0')
+        self.assertEqual(settings_dct['modelCoordinatesField'], 'coordinates')
+        self.assertIsNone(settings_dct['modelFitGroup'])
+        self.assertIsNone(settings_dct['fibreField'])
+        self.assertIsNone(settings_dct['flattenGroup'])
+        self.assertEqual(settings_dct['dataCoordinatesField'], 'data_coordinates')
+        self.assertEqual(settings_dct['markerGroup'], 'marker')
+        self.assertEqual(settings_dct['diagnosticLevel'], 1)
+        self.assertEqual(len(settings_dct['fitterSteps']), 3)
         fitter2 = Fitter(zinc_model_file, zinc_data_file)
         fitter2.decodeSettingsJSON(s, decodeJSONFitterSteps)
         fitterSteps = fitter2.getFitterSteps()

@@ -126,6 +126,8 @@ class Fitter:
         self._logger = None
         self._context = None
 
+    SCAFFOLD_FITTER_SETTINGS_ID = "scaffold fitter settings"
+
     def decodeSettingsJSON(self, s: str, decoder):
         """
         Define Fitter from JSON serialisation output by encodeSettingsJSON.
@@ -140,6 +142,10 @@ class Fitter:
         # ensure there is a first config step:
         if (len(self._fitterSteps) > 0) and isinstance(self._fitterSteps[0], FitterStepConfig):
             # field names are read (default to None), fields are found on load
+            id = settings.get("id")
+            if id is not None:
+                assert id == self.SCAFFOLD_FITTER_SETTINGS_ID
+                assert settings['version'] == '1.0.0'  # future: migrate if version changes
             self._modelCoordinatesFieldName = settings.get("modelCoordinatesField")
             self._modelFitGroupName = settings.get("modelFitGroup")
             self._fibreFieldName = settings.get("fibreField")
@@ -156,6 +162,8 @@ class Fitter:
         :return: String JSON encoding of Fitter settings.
         """
         dct = {
+            "id": self.SCAFFOLD_FITTER_SETTINGS_ID,
+            "version": "1.0.0",
             "modelCoordinatesField": self._modelCoordinatesFieldName,
             "modelFitGroup": self._modelFitGroupName,
             "fibreField": self._fibreFieldName,
