@@ -1468,7 +1468,7 @@ class Fitter:
             datapoints = self._fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
             fieldcache = self._fieldmodule.createFieldcache()
             groups = get_group_list(self._fieldmodule)
-             for group in groups:
+            for group in groups:
                 if not group.isManaged():
                     continue  # skip cmiss_selection, for example
                 groupName = group.getName()
