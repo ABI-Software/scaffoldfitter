@@ -1302,8 +1302,8 @@ class Fitter:
                 element, xi = findLocation.evaluateMeshLocation(fieldcache, storeMeshDimension)
                 if element.isValid():
                     result = meshLocation.assignMeshLocation(fieldcache, element, xi)
-                    assert result == RESULT_OK, \
-                        "Error: Failed to assign data projection mesh location for group " + groupName
+                    if result != RESULT_OK:
+                        logger.error("Failed to assign data projection mesh location for group " + groupName)
                     result, projectionLength = self._dataErrorField.evaluateReal(fieldcache, 1)
                     if projectionLength > maximumProjectionLength:
                         maximumProjectionLength = projectionLength
@@ -1554,8 +1554,9 @@ class Fitter:
                     fieldassignment = self._dataProjectionOrientationField.createFieldassignment(sourceOrientationField)
                     fieldassignment.setNodeset(nodesetGroup)
                     result = fieldassignment.assign()
-                    assert result in [RESULT_OK, RESULT_WARNING_PART_DONE], \
-                        "Error:  Failed to assign data projection orientation for mesh dimension " + str(meshDimension)
+                    if result not in [RESULT_OK, RESULT_WARNING_PART_DONE]:
+                        logger.error("Failed to assign data projection orientation for mesh dimension "
+                              + str(meshDimension) + ", result = " + str(result))
                     del fieldassignment
                     del sourceOrientationField
 

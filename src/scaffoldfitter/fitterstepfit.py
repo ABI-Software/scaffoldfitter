@@ -6,7 +6,11 @@ from cmlibs.utils.zinc.general import ChangeManager
 from cmlibs.zinc.optimisation import Optimisation
 from cmlibs.zinc.result import RESULT_OK
 from scaffoldfitter.fitterstep import FitterStep
+import logging
 import sys
+
+
+logger = logging.getLogger(__name__)
 
 
 class FitterStepFit(FitterStep):
@@ -348,6 +352,7 @@ class FitterStepFit(FitterStep):
 
         fieldcache = fieldmodule.createFieldcache()
         objectiveFormat = "{:12e}"
+        success = True
         for iterationIndex in range(self._numberOfIterations):
             iterName = str(iterationIndex + 1)
             if self.getDiagnosticLevel() > 0:
@@ -367,7 +372,11 @@ class FitterStepFit(FitterStep):
             if self.getDiagnosticLevel() > 1:
                 solutionReport = optimisation.getSolutionReport()
                 print(solutionReport)
-            assert result == RESULT_OK, "Fit Geometry:  Optimisation failed with result " + str(result)
+            if result != RESULT_OK:
+                logger.error("Fit Geometry:  Optimisation failed with result " + str(result))
+                success = False
+                # self._fitter.print_log()
+                break
             self._fitter.calculateDataProjections(self)
             if modelFileNameStem:
                 self._fitter.writeModel(modelFileNameStem + "_fit" + iterName + ".exf")
@@ -390,7 +399,7 @@ class FitterStepFit(FitterStep):
         if self._updateReferenceState:
             self._fitter.updateModelReferenceCoordinates()
 
-        self.setHasRun(True)
+        self.setHasRun(success)
 
     def createDataObjectiveField(self):
         """
