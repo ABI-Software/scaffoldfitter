@@ -33,11 +33,8 @@ class Fit2dTestCase(unittest.TestCase):
         fit1.setGroupDataSlidingFactor(None, 0.01)
         self.assertEqual((0.01, True, False), fit1.getGroupDataSlidingFactor(None))
         # can't use a curvature penalty without a fibre field
-        with self.assertRaises(AssertionError) as cm:
-            fit1.run()
-        self.assertEqual(str(cm.exception),
-                         "Must supply a fibre field to use strain/curvature penalties "
-                         "with mesh dimension < coordinate components.")
+        fit1.run()
+        self.assertFalse(fit1.hasRun())
 
         # set the in-built zero fibres field
         fieldmodule = fitter.getFieldmodule()
@@ -53,6 +50,7 @@ class Fit2dTestCase(unittest.TestCase):
         self.assertEqual(fitter.getDataCoordinatesField().getName(), "data_coordinates")
 
         fit1.run()
+        self.assertTrue(fit1.hasRun())
 
         # check surface area of fitted coordinates
         # Note name is only prefixes with "fitted " when written with Fitter.writeModel

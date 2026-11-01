@@ -2,8 +2,6 @@
 Main class for fitting scaffolds.
 """
 
-import json
-
 from cmlibs.maths.vectorops import add, mult, sub
 from cmlibs.utils.zinc.field import (
     assignFieldParameters, createFieldFiniteElementClone, getGroupList, findOrCreateFieldFiniteElement,
@@ -24,6 +22,12 @@ from scaffoldfitter.fitterexceptions import FitterModelCoordinateField
 from scaffoldfitter.fitterstep import FitterStep
 from scaffoldfitter.fitterstepconfig import FitterStepConfig
 from scaffoldfitter.fitterstepfit import FitterStepFit
+
+import json
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def _next_available_identifier(node_set, candidate):
@@ -1555,7 +1559,7 @@ class Fitter:
                     fieldassignment.setNodeset(nodesetGroup)
                     result = fieldassignment.assign()
                     if result not in [RESULT_OK, RESULT_WARNING_PART_DONE]:
-                        logger.error("Failed to assign data projection orientation for mesh dimension "
+                        logger.error(" Failed to assign data projection orientation for mesh dimension "
                               + str(meshDimension) + ", result = " + str(result))
                     del fieldassignment
                     del sourceOrientationField
