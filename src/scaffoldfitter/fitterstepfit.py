@@ -6,7 +6,11 @@ from cmlibs.utils.zinc.general import ChangeManager
 from cmlibs.zinc.optimisation import Optimisation
 from cmlibs.zinc.result import RESULT_OK
 from scaffoldfitter.fitterstep import FitterStep
+import logging
 import sys
+
+
+logger = logging.getLogger(__name__)
 
 
 class FitterStepFit(FitterStep):
@@ -323,6 +327,8 @@ class FitterStepFit(FitterStep):
         deformActiveMeshGroup, strainActiveMeshGroup, curvatureActiveMeshGroup = \
             self._fitter.assignDeformationPenalties(self)
 
+        success = True
+
         fieldmodule = self._fitter.getFieldmodule()
         optimisation = fieldmodule.createOptimisation()
         optimisation.setMethod(Optimisation.METHOD_NEWTON)
@@ -338,6 +344,9 @@ class FitterStepFit(FitterStep):
             assert result == RESULT_OK, "Fit Geometry:  Could not add data objective field"
             deformationPenaltyObjective = self.createDeformationPenaltyObjectiveField(
                 deformActiveMeshGroup, strainActiveMeshGroup, curvatureActiveMeshGroup)
+            if isinstance(deformationPenaltyObjective, int) and (deformationPenaltyObjective != 0):
+                deformationPenaltyObjective = None
+                success = False
             if deformationPenaltyObjective:
                 result = optimisation.addObjectiveField(deformationPenaltyObjective)
                 assert result == RESULT_OK, "Fit Geometry:  Could not add strain/curvature penalty objective field"
@@ -348,7 +357,8 @@ class FitterStepFit(FitterStep):
 
         fieldcache = fieldmodule.createFieldcache()
         objectiveFormat = "{:12e}"
-        for iterationIndex in range(self._numberOfIterations):
+        iterationCount = self._numberOfIterations if success else 0
+        for iterationIndex in range(iterationCount):
             iterName = str(iterationIndex + 1)
             if self.getDiagnosticLevel() > 0:
                 print("-------- Iteration " + iterName)
@@ -367,7 +377,11 @@ class FitterStepFit(FitterStep):
             if self.getDiagnosticLevel() > 1:
                 solutionReport = optimisation.getSolutionReport()
                 print(solutionReport)
-            assert result == RESULT_OK, "Fit Geometry:  Optimisation failed with result " + str(result)
+            if result != RESULT_OK:
+                logger.error("Fit Geometry:  Optimisation failed with result " + str(result))
+                success = False
+                # self._fitter.print_log()
+                break
             self._fitter.calculateDataProjections(self)
             if modelFileNameStem:
                 self._fitter.writeModel(modelFileNameStem + "_fit" + iterName + ".exf")
@@ -387,10 +401,10 @@ class FitterStepFit(FitterStep):
             if self.getDiagnosticLevel() > 1:
                 self._fitter.print_log()
 
-        if self._updateReferenceState:
+        if success and self._updateReferenceState:
             self._fitter.updateModelReferenceCoordinates()
 
-        self.setHasRun(True)
+        self.setHasRun(success)
 
     def createDataObjectiveField(self):
         """
@@ -423,7 +437,8 @@ class FitterStepFit(FitterStep):
         :param deformActiveMeshGroup: Mesh group over which either penalties is applied.
         :param strainActiveMeshGroup: Mesh group over which strain penalty is applied.
         :param curvatureActiveMeshGroup: Mesh group over which curvature penalty is applied.
-        :return: Zinc FieldMeshIntegral, or None if not applied.
+        :return: Zinc FieldMeshIntegral, or None if not applied, or non-zero integer if there is an error
+        preventing the objective from being returned.
         """
         if deformActiveMeshGroup.getSize() == 0:
             return None
@@ -439,8 +454,10 @@ class FitterStepFit(FitterStep):
         fibreField = self._fitter.getFibreField()
         dimension = mesh.getDimension()
         coordinatesCount = modelCoordinates.getNumberOfComponents()
-        assert (coordinatesCount == dimension) or fibreField, \
-            "Must supply a fibre field to use strain/curvature penalties with mesh dimension < coordinate components."
+        if  (coordinatesCount != dimension) and not fibreField:
+            logger.error("Must supply a fibre field to use strain/curvature penalties "
+                         "with mesh dimension < coordinate components.")
+            return 1
         deformationGradient1 = deformationGradient1raw = fieldmodule.createFieldGradient(
             modelCoordinates, modelReferenceCoordinates)
         fibreAxes = None

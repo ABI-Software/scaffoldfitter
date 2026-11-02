@@ -219,6 +219,7 @@ class FitCubeToSphereTestCase(unittest.TestCase):
         fit1.setNumberOfIterations(3)
         fit1.setUpdateReferenceState(True)
         fit1.run()
+        self.assertTrue(fit1.hasRun())
         # fitter.getRegion().writeFile(os.path.join(here, "resources", "km_fitgeometry3.exf"))
 
         result, surfaceArea = surfaceAreaField.evaluateReal(fieldcache, 1)
@@ -360,6 +361,7 @@ class FitCubeToSphereTestCase(unittest.TestCase):
         # set sliding factor to equivalent used at time of test creation
         fit1.setGroupDataSlidingFactor(None, 1.0)
         fit1.run()
+        self.assertTrue(fit1.hasRun())
         result, surfaceArea = surfaceAreaField.evaluateReal(fieldcache, 1)
         self.assertEqual(result, RESULT_OK)
         result, volume = volumeField.evaluateReal(fieldcache, 1)
@@ -379,6 +381,7 @@ class FitCubeToSphereTestCase(unittest.TestCase):
         coordinates = fitter.getModelCoordinatesField()
         align.run()
         fit1.run()
+        self.assertTrue(fit1.hasRun())
         # get end node coordinate to prove twist 
         nodeExpectedCoordinates = {
             3: [0.789915975359949, -0.47623734167234666, -0.5068423371261838],
@@ -495,6 +498,7 @@ class FitCubeToSphereTestCase(unittest.TestCase):
         fit1.setNumberOfIterations(1)  # only first iteration is not subject to find mesh location algorithm changes
         fit1.setUpdateReferenceState(False)
         fit1.run()
+        self.assertTrue(fit1.hasRun())
         dataWeightField = fieldmodule.findFieldByName("data_weight").castFiniteElement()
         self.assertTrue(dataWeightField.isValid())
 
@@ -533,6 +537,7 @@ class FitCubeToSphereTestCase(unittest.TestCase):
         fit2.setNumberOfIterations(2)
         fit2.setUpdateReferenceState(True)
         fit2.run()
+        self.assertTrue(fit2.hasRun())
 
         result, surfaceArea = surfaceAreaField.evaluateReal(fieldcache, 1)
         self.assertEqual(result, RESULT_OK)

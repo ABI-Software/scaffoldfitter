@@ -171,6 +171,7 @@ class GeneralTestCase(unittest.TestCase):
             fit2.setGroupCurvaturePenalty(None, [1.0])
             fit2.setNumberOfIterations(2)
             fit2.run()
+            self.assertTrue(fit2.hasRun())
 
             config3 = FitterStepConfig()
             fitter.addFitterStep(config3)
@@ -192,6 +193,7 @@ class GeneralTestCase(unittest.TestCase):
             fitter.addFitterStep(fit4)
             fit4.setNumberOfIterations(2)
             fit4.run()
+            self.assertTrue(fit4.hasRun())
 
             TOL = 1.0E-7
             rmsError, maxError = fitter.getDataRMSAndMaximumProjectionError()
@@ -297,6 +299,7 @@ class GeneralTestCase(unittest.TestCase):
                 fit1b.setGroupCurvaturePenalty(None, [0.1])
                 fit1b.setNumberOfIterations(3)
                 fit1b.run()
+                self.assertTrue(fit1b.hasRun())
 
                 rmsError, maxError = fitterb.getDataRMSAndMaximumProjectionError()
                 minElementIdentifier, minJacobian = fitterb.getLowestElementJacobian()
@@ -344,6 +347,7 @@ class GeneralTestCase(unittest.TestCase):
         fit.setGroupCurvaturePenalty(None, [0.01])
         fit.setGroupCurvaturePenalty("part", [10.0])
         fit.run()
+        self.assertTrue(fit.hasRun())
 
         # check correct curvature penalties are applied per element: the smaller "part" group penalties take precedence
         fieldcache = fieldmodule.createFieldcache()
