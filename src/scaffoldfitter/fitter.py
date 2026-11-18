@@ -3,7 +3,7 @@ Main class for fitting scaffolds.
 """
 
 from cmlibs.maths.vectorops import add, mult, sub
-from cmlibs.utils.zinc.finiteelement import get_mesh_element_node_identifiers_maps
+from cmlibs.utils.zinc.finiteelement import get_mesh_element_node_identifier_maps
 from cmlibs.utils.zinc.field import (
     assignFieldParameters, createFieldFiniteElementClone, getGroupList, findOrCreateFieldFiniteElement,
     find_or_create_field_stored_mesh_location, getUniqueFieldName, orphanFieldByName, create_jacobian_determinant_field)
@@ -1368,7 +1368,7 @@ class Fitter:
                     if meshDimension == 1:
                         lineElementIdNodeIdMaps = self._groupLineElementIdNodeIdMaps.get(groupName)
                         if not lineElementIdNodeIdMaps:
-                            lineElementIdNodeIdMaps = get_mesh_element_node_identifiers_maps(
+                            lineElementIdNodeIdMaps = get_mesh_element_node_identifier_maps(
                                 meshGroup, self._modelCoordinatesField)
                             self._groupLineElementIdNodeIdMaps[groupName] = lineElementIdNodeIdMaps
                         onBoundary, axes = meshBoundaryAxes.get_line_axes(

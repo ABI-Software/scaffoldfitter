@@ -82,7 +82,7 @@ class FitterStep:
         """
         settingsNames = list(self._groupSettings.keys())
         if defaultGroupNone:
-            settingsNames = [None if (name == cls._defaultGroupName) else name for name in settingsNames]
+            settingsNames = [None if (name == self._defaultGroupName) else name for name in settingsNames]
         return settingsNames
 
     def clearGroupSetting(self, groupName: str, settingName: str):
