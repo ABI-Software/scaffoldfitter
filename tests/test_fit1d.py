@@ -77,12 +77,14 @@ class GeneralTestCase(unittest.TestCase):
         offsets = [
             [0.0, 0.0, 0.0],
             [mag, 0.0, 0.0],
+            [-mag, 0.0, 0.0],
             [0.0, mag, 0.0],
-            [0.0, 0.0, mag]
+            [0.0, -mag, 0.0],
+            [0.0, 0.0, mag],
+            [0.0, 0.0, -mag]
         ]
 
         for offset in offsets:
-            print(offset)
             context = Context("Test branch fit instability")
             region = context.getDefaultRegion()
 
@@ -103,7 +105,7 @@ class GeneralTestCase(unittest.TestCase):
                 zero_fibres = find_or_create_field_zero_fibres(fieldmodule)
 
             fitter = Fitter(region=region)
-            # fitter.setDiagnosticLevel(1)
+            fitter.setDiagnosticLevel(0)
             fitter.setModelCoordinatesField(coordinates)
             fitter.setFibreField(zero_fibres)
             fitter.defineCommonMeshFields()
@@ -130,13 +132,13 @@ class GeneralTestCase(unittest.TestCase):
 
             # extract fitted curve parameters from nodes
             expected_x = [
-                [20637.14258934411, -2947.076682628082, -608.0136047380532],
-                [19862.739651725424, -4453.173068477985, -662.8719936565557],
-                [18688.59653494555, -5664.037629482983, -711.2176491492552]]
+                [20637.12318111511, -2947.0943923264203, -608.014316560503],
+                [19862.83638434499, -4453.08578556958, -662.8684815807565],
+                [18689.987728765256, -5662.919125077371, -711.1721042445245]]
             expected_d1 = [
-                [105.71091968044493, -1832.9950269007682, -65.30462985983033],
-                [-1192.1453066581741, -1203.6052723817468, -49.751987459028435],
-                [-1022.8246115803953, -1399.9420901832882, -53.74735413990196]]
+                [106.2553618007571, -1832.4602883200805, -65.28328438119757],
+                [-1191.090913491253, -1202.5860376030116, -49.71124284349609],
+                [-1014.2038163846042, -1392.7527811776654, -53.45575090415969]]
             fieldcache = fieldmodule.createFieldcache()
             nodes = fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_NODES)
             for n in range(3):
