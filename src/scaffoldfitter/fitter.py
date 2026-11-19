@@ -1373,7 +1373,6 @@ class Fitter:
                             self._groupLineElementIdNodeIdMaps[groupName] = lineElementIdNodeIdMaps
                         onBoundary, axes = meshBoundaryAxes.get_line_axes(
                             element_fd, xi_fd, lineElementIdNodeIdMaps[0], lineElementIdNodeIdMaps[1])
-                        print("Element", element_fd.getIdentifier(), "xi", xi_fd, "onBoundary", onBoundary, "axes", axes)
                     else: # meshDimension == 2:
                         onBoundary, axes = meshBoundaryAxes.get_surface_axes(element_fd, xi_fd)
                     if onBoundary:
@@ -1500,8 +1499,6 @@ class Fitter:
             fieldcache = self._fieldmodule.createFieldcache()
             groups = getGroupList(self._fieldmodule)
             for group in groups:
-                print(group.getName())
-            for group in groups:
                 if not group.isManaged():
                     continue  # skip cmiss_selection, for example
                 groupName = group.getName()
@@ -1514,7 +1511,6 @@ class Fitter:
                         if group != self._markerGroup:
                             print("Warning: Cannot project data for group " + groupName + " as no matching mesh group")
                     continue
-                print("processing group", groupName, group)
                 if groupName not in self._dataProjectionGroupNames:
                     self._dataProjectionGroupNames.append(groupName)  # so only define mesh location, or warn once
                     fieldcache.setNode(dataGroup.createNodeiterator().next())
