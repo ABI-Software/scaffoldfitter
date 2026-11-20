@@ -1430,7 +1430,8 @@ class Fitter:
         if groupProjectionData:
             # workaround for Field.__eq__ not working for None as second argument on some systems
             if (((subgroup is None) and (groupProjectionData[0] is None)) or
-                    ((subgroup is not None) and (groupProjectionData[0] == subgroup))):
+                    ((subgroup is not None) and (groupProjectionData[0] is not None) and
+                     (groupProjectionData[0] == subgroup))):
                 return groupProjectionData[1], groupProjectionData[2]
         returnMeshGroup = None
         findHighestDimension = False
