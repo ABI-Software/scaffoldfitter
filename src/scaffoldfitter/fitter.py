@@ -537,7 +537,9 @@ class Fitter:
         return self._dataCoordinatesField
 
     def setDataCoordinatesField(self, dataCoordinatesField: Field):
-        if (self._dataCoordinatesField is not None) and (dataCoordinatesField == self._dataCoordinatesField):
+        if (((dataCoordinatesField is None) and (self._dataCoordinatesField is None)) or
+                ((dataCoordinatesField is not None) and (self._dataCoordinatesField is not None) and
+                 (dataCoordinatesField == self._dataCoordinatesField))):
             return
         finiteElementField = dataCoordinatesField.castFiniteElement()
         assert finiteElementField.isValid() and (finiteElementField.getNumberOfComponents() == 3)
@@ -1082,7 +1084,9 @@ class Fitter:
         return self._modelReferenceCoordinatesField
 
     def setModelCoordinatesField(self, modelCoordinatesField: Field):
-        if (self._modelCoordinatesField is not None) and (modelCoordinatesField == self._modelCoordinatesField):
+        if (((modelCoordinatesField is None) and (self._modelCoordinatesField is None)) or
+                ((modelCoordinatesField is not None) and (self._modelCoordinatesField is not None) and
+                 (modelCoordinatesField == self._modelCoordinatesField))):
             return
         finiteElementField = modelCoordinatesField.castFiniteElement()
         mesh = self.getHighestDimensionMesh()
@@ -1147,7 +1151,9 @@ class Fitter:
         mesh of highest dimension in model
         :param modelFitGroup: Zinc group or None for whole mesh.
         """
-        if (self._modelFitGroup is not None) and (modelFitGroup == self._modelFitGroup):
+        if (((modelFitGroup is None) and (self._modelFitGroup is None)) or
+                ((modelFitGroup is not None) and (self._modelFitGroup is not None) and
+                 (modelFitGroup == self._modelFitGroup))):
             return
         self._groupProjectionData = {}  # as this affects intersection groups
         fieldGroup = modelFitGroup.castGroup() if modelFitGroup else None
