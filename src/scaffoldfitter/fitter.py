@@ -3,6 +3,7 @@ Main class for fitting scaffolds.
 """
 
 from cmlibs.maths.vectorops import add, mult, sub
+from cmlibs.utils.zinc.finiteelement import get_mesh_element_node_identifier_maps
 from cmlibs.utils.zinc.field import (
     assignFieldParameters, createFieldFiniteElementClone, getGroupList, findOrCreateFieldFiniteElement,
     find_or_create_field_stored_mesh_location, getUniqueFieldName, orphanFieldByName, create_jacobian_determinant_field)
@@ -22,6 +23,7 @@ from scaffoldfitter.fitterexceptions import FitterModelCoordinateField
 from scaffoldfitter.fitterstep import FitterStep
 from scaffoldfitter.fitterstepconfig import FitterStepConfig
 from scaffoldfitter.fitterstepfit import FitterStepFit
+from scaffoldfitter.zinc_utils import Mesh_location_group_boundary_axes
 
 import json
 import logging
@@ -89,7 +91,11 @@ class Fitter:
         # field storing precalculated surface/line tangent and normal basis matrix
         # for transforming data delta vector to apply different sliding weights
         # Marker points use identity matrix
+        self._dataOnBoundaryGroup = None
+        self._dataOnBoundaryNodesetGroup = None
         self._dataProjectionOrientationField = None
+        # for 1-D projection groups, map of group name to (dict element id to node ids, dict node id to element ids) 
+        self._groupLineElementIdNodeIdMaps = {}
         self._markerGroup = None
         self._markerGroupName = None
         self._markerNodeGroup = None
@@ -131,6 +137,7 @@ class Fitter:
         self._context = None
 
     SCAFFOLD_FITTER_SETTINGS_ID = "scaffold fitter settings"
+    SCAFFOLD_FITTER_SETTINGS_VERSION = "1.1.0"  # increase whenever settings change
 
     def decodeSettingsJSON(self, s: str, decoder):
         """
@@ -147,9 +154,10 @@ class Fitter:
         if (len(self._fitterSteps) > 0) and isinstance(self._fitterSteps[0], FitterStepConfig):
             # field names are read (default to None), fields are found on load
             id = settings.get("id")
+            version = settings.get("version")
             if id is not None:
                 assert id == self.SCAFFOLD_FITTER_SETTINGS_ID
-                assert settings['version'] == '1.0.0'  # future: migrate if version changes
+                assert version is not None
             self._modelCoordinatesFieldName = settings.get("modelCoordinatesField")
             self._modelFitGroupName = settings.get("modelFitGroup")
             self._fibreFieldName = settings.get("fibreField")
@@ -157,6 +165,11 @@ class Fitter:
             self._dataCoordinatesFieldName = settings.get("dataCoordinatesField")
             self._markerGroupName = settings.get("markerGroup")
             self._diagnosticLevel = settings["diagnosticLevel"]
+            if version != self.SCAFFOLD_FITTER_SETTINGS_VERSION:
+                # convert version string "major.minor.patch" into tuple (major, minor, patch) or (0, 0, 0) if None
+                settings_version = tuple(map(int, version.split('.'))) if version else (0, 0, 0)
+                for fitterStep in self._fitterSteps:
+                    fitterStep.migrateLegacySettings(settings_version)
         else:
             self._fitterSteps = oldFitterSteps
             raise AssertionError("Missing initial config step")
@@ -167,7 +180,7 @@ class Fitter:
         """
         dct = {
             "id": self.SCAFFOLD_FITTER_SETTINGS_ID,
-            "version": "1.0.0",
+            "version": self.SCAFFOLD_FITTER_SETTINGS_VERSION,
             "modelCoordinatesField": self._modelCoordinatesFieldName,
             "modelFitGroup": self._modelFitGroupName,
             "fibreField": self._fibreFieldName,
@@ -290,6 +303,8 @@ class Fitter:
         self._dataProjectionGroupNames = []
         self._dataProjectionNodeGroupFields = []
         self._dataProjectionNodesetGroups = []
+        self._dataOnBoundaryGroup = None
+        self._dataOnBoundaryNodesetGroup = None
         self._dataProjectionOrientationField = None
         self._markerGroup = None
         self._markerNodeGroup = None
@@ -336,11 +351,12 @@ class Fitter:
         # Get centre and scale of data coordinates to manage fitting tolerances and steps.
         datapoints = self._fieldmodule.findNodesetByFieldDomainType(Field.DOMAIN_TYPE_DATAPOINTS)
         minimums, maximums = evaluate_field_nodeset_range(self._dataCoordinatesField, datapoints)
+        assert minimums and maximums, "No data to fit to"
         self._dataCentre = mult(add(minimums, maximums), 0.5)
-        self._dataScale = max(sub(maximums, minimums))
+        self._dataScale = max(1.0, max(sub(maximums, minimums)))
         if self._diagnosticLevel > 0:
-            print("Load data: data coordinates centre ", self._dataCentre)
-            print("Load data: data coordinates scale ", self._dataScale)
+            logger.info("Load data: data coordinates centre " + str(self._dataCentre))
+            logger.info("Load data: data coordinates scale " + str(self._dataScale))
         for step in self._fitterSteps:
             step.setHasRun(False)
         self._fitterSteps[0].run()  # initial config step will calculate data projections
@@ -356,6 +372,12 @@ class Fitter:
         :return: Precalculated maximum span of data on x, y, or z.
         """
         return self._dataScale
+
+    def getStretchExpScaleK(self):
+        """
+        :return: Value of k in expression 1 - e^-kx used to phase in application of stretch.
+        """
+        return 2000.0 / self._dataScale
 
     def defineCommonMeshFields(self):
         """
@@ -515,7 +537,9 @@ class Fitter:
         return self._dataCoordinatesField
 
     def setDataCoordinatesField(self, dataCoordinatesField: Field):
-        if (self._dataCoordinatesField is not None) and (dataCoordinatesField == self._dataCoordinatesField):
+        if (((dataCoordinatesField is None) and (self._dataCoordinatesField is None)) or
+                ((dataCoordinatesField is not None) and (self._dataCoordinatesField is not None) and
+                 (dataCoordinatesField == self._dataCoordinatesField))):
             return
         finiteElementField = dataCoordinatesField.castFiniteElement()
         assert finiteElementField.isValid() and (finiteElementField.getNumberOfComponents() == 3)
@@ -649,30 +673,43 @@ class Fitter:
                         orientedDataWeight = [slidingWeight, slidingWeight, dataWeight]
                     else:  # coordinatesCount == 2:
                         orientedDataWeight = [slidingWeight, slidingWeight]  # not expected
-                stretchOrientedDataWeight = [dataWeight] + orientedDataWeight[1:]
-                weightField = self._fieldmodule.createFieldConstant(orientedDataWeight)
-                dataStretch = fitterStepFit.getGroupDataStretch(groupName)[0]
-                if dataStretch:
-                    tangent1 = self._fieldmodule.createFieldComponent(
-                        self._dataProjectionOrientationField,
-                        [1, 2, 3] if (coordinatesCount == 3) else [1, 2] if (coordinatesCount == 2) else [1])
-                    weightField = self._fieldmodule.createFieldIf(
-                        self._fieldmodule.createFieldGreaterThan(
-                            self._fieldmodule.createFieldDotProduct(self._dataDeltaField, tangent1),
-                            self._fieldmodule.createFieldConstant([0.01]) *
-                            self._fieldmodule.createFieldMagnitude(self._dataDeltaField)),
-                        self._fieldmodule.createFieldConstant(stretchOrientedDataWeight),
-                        weightField)
-                    del tangent1
+                dataStretchFactor = fitterStepFit.getGroupDataStretchFactor(groupName)[0]
+                stretchWeight = dataStretchFactor * dataWeight
+                # whatever level of stretch, it is transitioned from the sliding weight at the boundary
+                deltaStretchWeight = stretchWeight - slidingWeight
+                tangent1 = self._fieldmodule.createFieldComponent(
+                    self._dataProjectionOrientationField,
+                    [1, 2, 3] if (coordinatesCount == 3) else [1, 2] if (coordinatesCount == 2) else [1])
+                projectionDistanceInTangent1 = self._fieldmodule.createFieldAbs(
+                    self._fieldmodule.createFieldDotProduct(tangent1, self._dataDeltaField))
+                # transition factor = (1.0 - exp(k * projectionDistanceInTangent1))
+                # so isn't suddenly applied which causes unstable results
+                stretchTransition = self._fieldmodule.createFieldSubtract(
+                    self._fieldmodule.createFieldConstant(1.0),
+                    self._fieldmodule.createFieldExp(
+                        self._fieldmodule.createFieldMultiply(
+                            self._fieldmodule.createFieldConstant(-self.getStretchExpScaleK()),
+                            projectionDistanceInTangent1)))
+                dataWeightStretchTransition = (
+                    self._fieldmodule.createFieldConstant(slidingWeight) +
+                    self._fieldmodule.createFieldConstant(deltaStretchWeight) * stretchTransition)
+                if coordinatesCount == 1:
+                    stretchWeightField = dataWeightStretchTransition
+                else:
+                    stretchWeightField = self._fieldmodule.createFieldConcatenate([
+                        dataWeightStretchTransition, self._fieldmodule.createFieldConstant(orientedDataWeight[1:])])
+                weightField = self._fieldmodule.createFieldIf(
+                    self._dataOnBoundaryGroup, stretchWeightField,
+                    self._fieldmodule.createFieldConstant(orientedDataWeight))
                 if self._diagnosticLevel > 0:
                     print("group", groupName, "mesh dimension", meshDimension, "data weight", dataWeight,
-                          "sliding factor", dataSlidingFactor, "stretch", dataStretch)
+                          "sliding factor", dataSlidingFactor, "stretch factor", dataStretchFactor)
                 fieldassignment = self._dataWeightField.createFieldassignment(weightField)
                 fieldassignment.setNodeset(dataGroup)
                 result = fieldassignment.assign()
                 if result != RESULT_OK:
                     print("Incomplete assignment of data weight for group", groupName, "Result", result)
-                del weightField
+                del weightField, stretchWeightField, dataWeightStretchTransition, stretchTransition, projectionDistanceInTangent1, tangent1
             if self._markerDataLocationGroup:
                 markerWeight = fitterStepFit.getGroupDataWeight(self._markerGroupName)[0]
                 orientedDataWeight = [markerWeight] * coordinatesCount
@@ -1047,7 +1084,9 @@ class Fitter:
         return self._modelReferenceCoordinatesField
 
     def setModelCoordinatesField(self, modelCoordinatesField: Field):
-        if (self._modelCoordinatesField is not None) and (modelCoordinatesField == self._modelCoordinatesField):
+        if (((modelCoordinatesField is None) and (self._modelCoordinatesField is None)) or
+                ((modelCoordinatesField is not None) and (self._modelCoordinatesField is not None) and
+                 (modelCoordinatesField == self._modelCoordinatesField))):
             return
         finiteElementField = modelCoordinatesField.castFiniteElement()
         mesh = self.getHighestDimensionMesh()
@@ -1112,7 +1151,9 @@ class Fitter:
         mesh of highest dimension in model
         :param modelFitGroup: Zinc group or None for whole mesh.
         """
-        if (self._modelFitGroup is not None) and (modelFitGroup == self._modelFitGroup):
+        if (((modelFitGroup is None) and (self._modelFitGroup is None)) or
+                ((modelFitGroup is not None) and (self._modelFitGroup is not None) and
+                 (modelFitGroup == self._modelFitGroup))):
             return
         self._groupProjectionData = {}  # as this affects intersection groups
         fieldGroup = modelFitGroup.castGroup() if modelFitGroup else None
@@ -1222,6 +1263,9 @@ class Fitter:
                 self._dataProjectionNodeGroupFields.append(group)
                 self._dataProjectionNodesetGroups.append(group.createNodesetGroup(datapoints))
             self._defineDataProjectionOrientationField()
+            self._dataOnBoundaryGroup = self._fieldmodule.createFieldGroup()
+            self._dataOnBoundaryGroup.setName(getUniqueFieldName(self._fieldmodule, "data_on_boundary_group"))
+            self._dataOnBoundaryNodesetGroup = self._dataOnBoundaryGroup.createNodesetGroup(datapoints)
 
     def calculateGroupDataProjections(self, fieldcache, group, dataGroup, meshGroup, findHighestDimension, meshLocation,
                                       activeFitterStepConfig: FitterStepConfig):
@@ -1273,20 +1317,25 @@ class Fitter:
             dataCoordinates = dataCoordinates + self._fieldmodule.createFieldConstant(sub(meshCentre, dataCentre))
 
         # find nearest locations on 1-D or 2-D feature but store on highest dimension mesh
+
+        meshBoundaryAxes = Mesh_location_group_boundary_axes(meshGroup, self._modelCoordinatesField, fieldcache)
+
         storeMesh = self.getHighestDimensionMesh()
         storeMeshDimension = storeMesh.getDimension()
         if self._modelFitGroup:
             storeMesh = self._modelFitGroup.getMeshGroup(storeMesh)
             assert storeMesh.isValid(), "Model fit group is wrong dimension"
+        findLocationFeatureDimension = self._fieldmodule.createFieldFindMeshLocation(
+            dataCoordinates, self._modelCoordinatesField, meshGroup)
+        findLocationFeatureDimension.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
         if findHighestDimension:
             # find nearest on search mesh, then find exact on store mesh from projected coordinates
-            findLocation1 = self._fieldmodule.createFieldFindMeshLocation(
-                dataCoordinates, self._modelCoordinatesField, meshGroup)
-            findLocation1.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
-            projectedCoordinates = self._fieldmodule.createFieldEmbedded(self._modelCoordinatesField, findLocation1)
+            projectedCoordinates = self._fieldmodule.createFieldEmbedded(self._modelCoordinatesField, findLocationFeatureDimension)
             findLocation = self._fieldmodule.createFieldFindMeshLocation(
                 projectedCoordinates, self._modelCoordinatesField, storeMesh)
             findLocation.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_EXACT)
+        elif storeMeshDimension == meshDimension:
+            findLocation = findLocationFeatureDimension
         else:
             # automatic map from search mesh to store mesh
             findLocation = self._fieldmodule.createFieldFindMeshLocation(
@@ -1319,6 +1368,29 @@ class Fitter:
                         pointsProjected += 1
                     else:
                         outlierPointsRemoved += 1
+
+                    # now refind on feature dimension, determine and store whether on boundary and axes
+                    element_fd, xi_fd = findLocationFeatureDimension.evaluateMeshLocation(fieldcache, meshDimension)
+                    if meshDimension == 1:
+                        lineElementIdNodeIdMaps = self._groupLineElementIdNodeIdMaps.get(groupName)
+                        if not lineElementIdNodeIdMaps:
+                            lineElementIdNodeIdMaps = get_mesh_element_node_identifier_maps(
+                                meshGroup, self._modelCoordinatesField)
+                            self._groupLineElementIdNodeIdMaps[groupName] = lineElementIdNodeIdMaps
+                        onBoundary, axes = meshBoundaryAxes.get_line_axes(
+                            element_fd, xi_fd, lineElementIdNodeIdMaps[0], lineElementIdNodeIdMaps[1])
+                    else: # meshDimension == 2:
+                        onBoundary, axes = meshBoundaryAxes.get_surface_axes(element_fd, xi_fd)
+                    if onBoundary:
+                        self._dataOnBoundaryNodesetGroup.addNode(node)
+                    fieldcache.setNode(node)
+                    result = self._dataProjectionOrientationField.assignReal(fieldcache, axes)
+                    if result != RESULT_OK:
+                        logger.error("Failed to assign data projection orientation for data point " +
+                                     str(node.getIdentifier()) + " in group " + groupName +
+                                     ", mesh dimension " + str(meshDimension))
+                        dataProjectionNodesetGroup.removeNode(node)
+                        assert result == RESULT_OK, "Data projection orientation assignment failed"
             node = nodeIter.next()
         if outlierLength < 0.0:
             relativeOutlierLength = (1.0 + outlierLength) * maximumProjectionLength
@@ -1362,7 +1434,10 @@ class Fitter:
         subgroup = activeFitterStepConfig.getGroupProjectionSubgroup(groupName)[0]
         groupProjectionData = self._groupProjectionData.get(groupName)
         if groupProjectionData:
-            if (groupProjectionData[0] == subgroup):
+            # workaround for Field.__eq__ not working for None as second argument on some systems
+            if (((subgroup is None) and (groupProjectionData[0] is None)) or
+                    ((subgroup is not None) and (groupProjectionData[0] is not None) and
+                     (groupProjectionData[0] == subgroup))):
                 return groupProjectionData[1], groupProjectionData[2]
         returnMeshGroup = None
         findHighestDimension = False
@@ -1420,6 +1495,8 @@ class Fitter:
         with ChangeManager(self._fieldmodule):
             # build group of active data and marker points
             self._activeDataNodesetGroup.removeAllNodes()
+            # group of data points projecting onto group boundary are recalculated here
+            self._dataOnBoundaryNodesetGroup.removeAllNodes()
             if self._markerDataLocationGroupField:
                 self._activeDataNodesetGroup.addNodesConditional(self._markerDataLocationGroupField)
             # build groups of data and elements participating in projections in 1 and 2 dimension
@@ -1468,102 +1545,6 @@ class Fitter:
                 # add elements being projected onto to active group for mesh dimension
                 self._activeDataProjectionMeshGroups[meshGroup.getDimension() - 1].addElementsConditional(group)
 
-            # Assign data projection orientation
-            coordinatesCount = self._modelCoordinatesField.getNumberOfComponents()
-            highestMeshDimension = self.getHighestDimensionMesh().getDimension()
-            for meshDimension in range(1, 3):
-                nodesetGroup = self._dataProjectionNodesetGroups[meshDimension - 1]
-                if nodesetGroup.getSize() > 0:
-                    if meshDimension == highestMeshDimension:
-                        faceLocationField = self._dataHostLocationField  # 2-D fit case
-                    else:
-                        # unfortunately need to find mesh location again, this time on active line/face mesh
-                        faceLocationField = self._fieldmodule.createFieldFindMeshLocation(
-                            self._dataHostCoordinatesField, self._modelCoordinatesField,
-                            self._activeDataProjectionMeshGroups[meshDimension - 1])
-                        # in theory SEARCH_MODE_EXACT should work, however tests fail
-                        faceLocationField.setSearchMode(FieldFindMeshLocation.SEARCH_MODE_NEAREST)
-                    d1 = self._fieldmodule.createFieldDerivative(self._modelCoordinatesField, 1)
-                    if meshDimension == 1:
-                        d1 = self._fieldmodule.createFieldNormalise(d1)
-                        if coordinatesCount == 3:
-                            side1 = self._fieldmodule.createFieldCrossProduct(
-                                self._fieldmodule.createFieldConstant([1.0, 0.0, 0.0]), d1)
-                            side2 = self._fieldmodule.createFieldCrossProduct(
-                                self._fieldmodule.createFieldConstant([0.0, 1.0, 0.0]), d1)
-                            side1 = self._fieldmodule.createFieldNormalise(
-                                self._fieldmodule.createFieldIf(
-                                    self._fieldmodule.createFieldGreaterThan(
-                                        self._fieldmodule.createFieldMagnitude(side1),
-                                        self._fieldmodule.createFieldMagnitude(side2)),
-                                    side1, side2))
-                            side2 = self._fieldmodule.createFieldCrossProduct(d1, side1)
-                            directions = [d1, side1, side2]
-                            del side2
-                            del side1
-                        elif coordinatesCount == 2:
-                            side1 = self._fieldmodule.createFieldMatrixMultiply(
-                                2, self._fieldmodule.createFieldConstant([0.0, -1.0, 1.0, 0.0]), d1)
-                            directions = [d1, side1]
-                            del side1
-                        else:  # coordinatesCount == 1:
-                            directions = [d1]
-                        sourceOrientationField = self._fieldmodule.createFieldEmbedded(
-                            self._fieldmodule.createFieldConcatenate(directions), faceLocationField)
-                        del directions
-                    else:  # meshDimension == 2:
-                        # if data delta has a non-negligible tangential component,
-                        # align d1 with it to enable stretch in that direction
-                        d2 = self._fieldmodule.createFieldDerivative(self._modelCoordinatesField, 2)
-                        dLimit = self._fieldmodule.createFieldConstant([1.0E-5]) * \
-                                     self._fieldmodule.createFieldMagnitude(
-                                        self._fieldmodule.createFieldEmbedded(d1 + d2, faceLocationField))
-                        if coordinatesCount == 3:
-                            normal = self._fieldmodule.createFieldEmbedded(
-                                self._fieldmodule.createFieldNormalise(
-                                    self._fieldmodule.createFieldCrossProduct(d1, d2)),
-                                faceLocationField)
-                            magDeltaNormal = self._fieldmodule.createFieldDotProduct(
-                                self._dataDeltaField, normal)
-                            deltaNormal = magDeltaNormal * normal
-                            deltaTangent = self._dataDeltaField - deltaNormal
-                            d1 = self._fieldmodule.createFieldNormalise(
-                                self._fieldmodule.createFieldIf(
-                                    self._fieldmodule.createFieldGreaterThan(
-                                        self._fieldmodule.createFieldMagnitude(deltaTangent), dLimit),
-                                    deltaTangent,
-                                    self._fieldmodule.createFieldEmbedded(d1, faceLocationField)))
-                            d2 = self._fieldmodule.createFieldCrossProduct(normal, d1)
-                            directions = [d1, d2, normal]
-                            del deltaTangent
-                            del deltaNormal
-                            del magDeltaNormal
-                            del normal
-                        else:  # coordinatesCount == 2:
-                            d1 = self._fieldmodule.createFieldNormalise(
-                                self._fieldmodule.createFieldIf(
-                                    self._fieldmodule.createFieldGreaterThan(
-                                        self._fieldmodule.createFieldMagnitude(self._dataDeltaField), dLimit),
-                                    self._dataDeltaField,
-                                    self._fieldmodule.createFieldEmbedded(d1, faceLocationField)))
-                            d2 = self._fieldmodule.createFieldMatrixMultiply(
-                                2, self._fieldmodule.createFieldConstant([0.0, -1.0, 1.0, 0.0]), d1)
-                            directions = [d1, d2]
-                        del dLimit
-                        del d2
-                        sourceOrientationField = self._fieldmodule.createFieldConcatenate(directions)
-                        del directions
-                    del d1
-                    del faceLocationField
-                    fieldassignment = self._dataProjectionOrientationField.createFieldassignment(sourceOrientationField)
-                    fieldassignment.setNodeset(nodesetGroup)
-                    result = fieldassignment.assign()
-                    if result not in [RESULT_OK, RESULT_WARNING_PART_DONE]:
-                        logger.error(" Failed to assign data projection orientation for mesh dimension "
-                              + str(meshDimension) + ", result = " + str(result))
-                    del fieldassignment
-                    del sourceOrientationField
-
             if self.getDiagnosticLevel() > 0:
                 # Warn about unprojected points
                 unprojectedDataGroup = self._fieldmodule.createFieldGroup()
@@ -1595,6 +1576,9 @@ class Fitter:
     def getDataProjectionNodeGroupField(self, meshDimension):
         assert 1 <= meshDimension <= 2
         return self._dataProjectionNodeGroupFields[meshDimension - 1]
+
+    def getDataOnBoundaryGroup(self):
+        return self._dataOnBoundaryGroup
 
     def getDataProjectionNodesetGroup(self, meshDimension):
         assert 1 <= meshDimension <= 2

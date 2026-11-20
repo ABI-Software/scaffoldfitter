@@ -56,9 +56,9 @@ class GeneralTestCase(unittest.TestCase):
             if case == 0:
                 # no outlier filtering
                 expectedActiveDataSize = 27  # 25 data points + 2 marker point
-                expectedLength = 3.0487700371049233
-                expectedRmsError = 0.033684088293952655
-                expectedMaxError = 0.1495389726841688
+                expectedLength = 3.0558416661337366
+                expectedRmsError = 0.033606124521489575
+                expectedMaxError = 0.14947382080783808
             else:
                 if case == 1:
                     # absolute outlier length applied to default group
@@ -68,9 +68,9 @@ class GeneralTestCase(unittest.TestCase):
                     config1.clearGroupOutlierLength(None)
                     config1.setGroupOutlierLength("trunk", -0.1)
                 expectedActiveDataSize = 26  # one outlier has been filtered
-                expectedLength = 3.0331818804905284
-                expectedRmsError = 0.009620758125514172
-                expectedMaxError = 0.017088084995279192
+                expectedLength = 3.044880987357345
+                expectedRmsError = 0.00914426601266915
+                expectedMaxError = 0.016582722162009723
 
             fitter.run()
 
@@ -198,10 +198,10 @@ class GeneralTestCase(unittest.TestCase):
             TOL = 1.0E-7
             rmsError, maxError = fitter.getDataRMSAndMaximumProjectionError()
             minElementIdentifier, minJacobian = fitter.getLowestElementJacobian()
-            self.assertAlmostEqual(rmsError, 0.01788062932269768, delta=TOL)
-            self.assertAlmostEqual(maxError, 0.0660542949294517, delta=TOL)
+            self.assertAlmostEqual(rmsError, 0.01304238642960269, delta=TOL)
+            self.assertAlmostEqual(maxError, 0.02767273478469442, delta=TOL)
             self.assertEqual(minElementIdentifier, 2)
-            self.assertAlmostEqual(minJacobian, 1.165478981129574, delta=TOL)
+            self.assertAlmostEqual(minJacobian, 1.1900653374810248, delta=TOL)
 
             # check all projected coordinates are to the centroid of the trunk
             fieldcache = fieldmodule.createFieldcache()
@@ -303,10 +303,10 @@ class GeneralTestCase(unittest.TestCase):
 
                 rmsError, maxError = fitterb.getDataRMSAndMaximumProjectionError()
                 minElementIdentifier, minJacobian = fitterb.getLowestElementJacobian()
-                self.assertAlmostEqual(rmsError, 0.02347727286951435, delta=TOL)
-                self.assertAlmostEqual(maxError, 0.04547098724783385, delta=TOL)
+                self.assertAlmostEqual(rmsError, 0.023416527693330455, delta=TOL)
+                self.assertAlmostEqual(maxError, 0.04530591421758564, delta=TOL)
                 self.assertEqual(minElementIdentifier, 102)
-                self.assertAlmostEqual(minJacobian, 0.8073661446227143, delta=TOL)
+                self.assertAlmostEqual(minJacobian, 0.8126008716385138, delta=TOL)
 
     def test_group_settings(self):
         """

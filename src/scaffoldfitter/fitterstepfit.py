@@ -18,7 +18,7 @@ class FitterStepFit(FitterStep):
     _jsonTypeId = "_FitterStepFit"
     _dataWeightToken = "dataWeight"
     _dataSlidingFactorToken = "dataSlidingFactor"
-    _dataStretchToken = "dataStretch"
+    _dataStretchFactorToken = "dataStretchFactor"
     _strainPenaltyToken = "strainPenalty"
     _curvaturePenaltyToken = "curvaturePenalty"
 
@@ -43,6 +43,19 @@ class FitterStepFit(FitterStep):
         self._numberOfIterations = dct["numberOfIterations"]
         self._maximumSubIterations = dct["maximumSubIterations"]
         self._updateReferenceState = dct["updateReferenceState"]
+
+    def migrateLegacySettings(self, settings_version):
+        """
+        Migrate legacy settings if its an old settings version.
+        :param settings_version: Tuple (major, minor, patch), all integers.
+        (0, 0, 0) is passed if settings didn't have a version.
+        """
+        if settings_version < (1, 1, 0):
+            # migrate obsolete dataStretch, now dataStretchFactor (False/True --> 0.0/1.0)
+            for groupName in self.getGroupSettingsNames(defaultGroupNone=True):
+                dataStretch, setLocally, inheritable = self.getGroupSetting(groupName, "dataStretch", True)
+                if setLocally and (dataStretch is not None):
+                    self.setGroupSetting(groupName, self._dataStretchFactorToken, 1.0 if dataStretch else 0.0)
 
     def encodeSettingsJSONDict(self) -> dict:
         """
@@ -140,41 +153,52 @@ class FitterStepFit(FitterStep):
                 slidingFactor = 0.0
         self.setGroupSetting(groupName, self._dataSlidingFactorToken, slidingFactor)
 
-    def clearGroupDataStretch(self, groupName):
+    def clearGroupDataStretchFactor(self, groupName):
         """
-        Clear local group data stretch so fall back to last config or global default.
+        Clear local group data stretch factor so fall back to last set value or global default.
         :param groupName:  Exact model group name, or None for default group.
         """
-        self.clearGroupSetting(groupName, self._dataStretchToken)
+        self.clearGroupSetting(groupName, self._dataStretchFactorToken)
 
-    def getGroupDataStretch(self, groupName):
+    def getGroupDataStretchFactor(self, groupName):
         """
-        Get flag controlling whether tangential projections have the full
-        data weight applied to them to stretch the model to the span of data
-        with zero/low sliding factor. Default is True/on.
+        Get real factor multiplying group data weight to apply to data points
+        projecting onto the group boundary in the outward normal direction.
+        0.0 means no stretch, 1.0 applies the full data weight tending to
+        stretch the model to the span of data (and it's helpful to have
+        low/zero sliding factor at the same time). Higher or lower values can
+        tailor the amount of stretch. Default is 1.0.
         :param groupName:  Exact model group name, or None for default group.
-        :return:  Data stretch flag, setLocally, inheritable.
+        :return:  Data stretch factor (real >= 0.0), setLocally, inheritable.
         The second return value is True if the value is set locally to a value
         or None if reset locally.
         The third return value is True if a previous config has set the value.
         """
-        return self.getGroupSetting(groupName, self._dataStretchToken, True)
+        return self.getGroupSetting(groupName, self._dataStretchFactorToken, 1.0)
 
-    def setGroupDataStretch(self, groupName, dataStretch):
+    def setGroupDataStretchFactor(self, groupName, dataStretchFactor):
         """
-        Set flag controlling whether tangential projections have the full
-        data weight applied to them to stretch the model to the span of data
-        with zero/low sliding factor. Turn off for groups such as inlet/outlet
-        tubes where specimens show quite variable length, so feature is oriented
-        with the data but keeps its length from the reference scaffold.
-        :param groupName:  Exact model group name, or None for default group.
-        :param dataStretch:  Boolean True/False or None to reset to global
-        default. Function ensures value is valid.
+        Set real factor multiplying group data weight to apply to data points
+        projecting onto the group boundary in the outward normal direction.
+        0.0 means no stretch, 1.0 applies the full data weight tending to
+        stretch the model to the span of data (and it's helpful to have
+        low/zero sliding factor at the same time). Higher or lower values can
+        tailor the amount of stretch.
+        Use a low/zero value for groups such as inlet/outlet tubes where
+        specimen lengths are variable, so feature is oriented with the data but
+        keeps its length from the reference scaffold.
+        :param groupName: Exact model group name, or None for default group.
+        :param dataStretchFactor: Real factor >= 0.0 where 0.0 means no
+        stretch and 1.0 means full data weight is applied in stretch direction,
+        or None to reset to global default. Function ensures value is valid.
         """
-        if dataStretch is not None:
-            if not isinstance(dataStretch, bool):
+        if dataStretchFactor is not None:
+            if not isinstance(dataStretchFactor, float):
+                logger.warning('Fit.setGroupDataStretchFactor  Not a float.')
                 return
-        self.setGroupSetting(groupName, self._dataStretchToken, dataStretch)
+            if dataStretchFactor < 0.0:
+                dataStretchFactor = 0.0
+        self.setGroupSetting(groupName, self._dataStretchFactorToken, dataStretchFactor)
 
     def clearGroupStrainPenalty(self, groupName: str):
         """
