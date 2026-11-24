@@ -151,7 +151,7 @@ class FitterStep:
             inheritable = defaultGroupSetLocally or defaultGroupInheritable
             if inheritable and (value == self._notSetValue):
                 value = defaultGroupValue
-        if (value == None) or (value == self._notSetValue):
+        if (value is None) or (value == self._notSetValue):
             value = defaultValue
         return value, setLocally, inheritable
 

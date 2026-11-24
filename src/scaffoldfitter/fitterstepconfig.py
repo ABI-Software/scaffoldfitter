@@ -4,7 +4,6 @@ Fit step for configuring subsequent behaviour, e.g. data projection settings.
 
 from scaffoldfitter.fitterstep import FitterStep
 import logging
-import sys
 
 
 logger = logging.getLogger(__name__)

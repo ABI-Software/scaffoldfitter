@@ -1,6 +1,5 @@
 from cmlibs.maths.vectorops import cross, div, magnitude, sub
 from cmlibs.zinc.result import RESULT_OK
-import copy
 import logging
 
 

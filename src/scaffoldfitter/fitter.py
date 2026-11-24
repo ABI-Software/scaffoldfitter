@@ -17,7 +17,7 @@ from cmlibs.zinc.context import Context
 from cmlibs.zinc.element import Elementbasis, Elementfieldtemplate
 from cmlibs.zinc.field import Field, FieldFindMeshLocation, FieldGroup
 from cmlibs.zinc.region import Region
-from cmlibs.zinc.result import RESULT_OK, RESULT_WARNING_PART_DONE
+from cmlibs.zinc.result import RESULT_OK
 
 from scaffoldfitter.fitterexceptions import FitterModelCoordinateField
 from scaffoldfitter.fitterstep import FitterStep
@@ -94,7 +94,7 @@ class Fitter:
         self._dataOnBoundaryGroup = None
         self._dataOnBoundaryNodesetGroup = None
         self._dataProjectionOrientationField = None
-        # for 1-D projection groups, map of group name to (dict element id to node ids, dict node id to element ids) 
+        # for 1-D projection groups, map of group name to (dict element id to node ids, dict node id to element ids)
         self._groupLineElementIdNodeIdMaps = {}
         self._markerGroup = None
         self._markerGroupName = None
@@ -217,11 +217,9 @@ class Fitter:
         fitterStep = self._fitterSteps[prevIndex]
         # Switch position
         self._fitterSteps.insert(newIndex, self._fitterSteps.pop(prevIndex))
-        beforeFitterStep = self._fitterSteps[newIndex - 1]
         afterFitterStep = self._fitterSteps[newIndex + 1] if newIndex < len(self._fitterSteps) - 1 else None
         isMovingStepRun = fitterStep.hasRun()
         isAfterStepRun = afterFitterStep.hasRun() if afterFitterStep else False
-        isBeforeStepRun = beforeFitterStep.hasRun()
         if not isMovingStepRun and not isAfterStepRun:
             return False, self._fitterSteps.index(endStep)
         endStep = self._fitterSteps[0]

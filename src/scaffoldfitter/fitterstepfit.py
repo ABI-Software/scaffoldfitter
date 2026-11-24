@@ -7,7 +7,6 @@ from cmlibs.zinc.optimisation import Optimisation
 from cmlibs.zinc.result import RESULT_OK
 from scaffoldfitter.fitterstep import FitterStep
 import logging
-import sys
 
 
 logger = logging.getLogger(__name__)
@@ -478,7 +477,7 @@ class FitterStepFit(FitterStep):
         fibreField = self._fitter.getFibreField()
         dimension = mesh.getDimension()
         coordinatesCount = modelCoordinates.getNumberOfComponents()
-        if  (coordinatesCount != dimension) and not fibreField:
+        if (coordinatesCount != dimension) and not fibreField:
             logger.error("Must supply a fibre field to use strain/curvature penalties "
                          "with mesh dimension < coordinate components.")
             return 1
@@ -508,11 +507,11 @@ class FitterStepFit(FitterStep):
             deformationGradient1T = fieldmodule.createFieldTranspose(coordinatesCount, deformationGradient1)
             C = fieldmodule.createFieldMatrixMultiply(dimension, deformationGradient1T, deformationGradient1)
             alpha = self._fitter.getStrainPenaltyField()
-            I = fieldmodule.createFieldConstant(
+            identity_matrix = fieldmodule.createFieldConstant(
                 [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0] if (dimension == 3) else
                 [1.0, 0.0, 0.0, 1.0] if (dimension == 2) else
                 [1.0])
-            E2 = C - I
+            E2 = C - identity_matrix
             wtSqE2 = fieldmodule.createFieldDotProduct(alpha, E2 * E2)
             deformationTerm = wtSqE2
         if applyCurvaturePenalty:
