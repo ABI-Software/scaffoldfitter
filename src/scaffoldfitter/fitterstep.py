@@ -66,11 +66,24 @@ class FitterStep:
             "groupSettings": self._groupSettings
             }
 
-    def getGroupSettingsNames(self):
+    def migrateLegacySettings(self, settings_version):
         """
-        :return:  List of names of groups settings are held for.
+        Override this method to migrate legacy settings.
+        :param settings_version: Tuple (major, minor, patch), all integers.
+        (0, 0, 0) is passed if settings didn't have a version.
         """
-        return list(self._groupSettings.keys())
+        pass
+
+    def getGroupSettingsNames(self, defaultGroupNone=False):
+        """
+        :param defaultGroupNone: If True, convert internal name for default group to None, otherwise keep the
+        internal string version.
+        :return: List of names of groups that settings are held for.
+        """
+        settingsNames = list(self._groupSettings.keys())
+        if defaultGroupNone:
+            settingsNames = [None if (name == self._defaultGroupName) else name for name in settingsNames]
+        return settingsNames
 
     def clearGroupSetting(self, groupName: str, settingName: str):
         """
@@ -138,7 +151,7 @@ class FitterStep:
             inheritable = defaultGroupSetLocally or defaultGroupInheritable
             if inheritable and (value == self._notSetValue):
                 value = defaultGroupValue
-        if (value == None) or (value == self._notSetValue):
+        if (value is None) or (value == self._notSetValue):
             value = defaultValue
         return value, setLocally, inheritable
 

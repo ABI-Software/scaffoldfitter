@@ -453,6 +453,7 @@ class FitterStepAlign(FitterStep):
 
             # Pre-align to avoid gimbal lock
             first = True
+            minObjectiveValue = None
             for x in range(2):
                 roll = 0.5 * math.pi * x
                 for y in (range(4) if x == 0 else (0, 2)):
